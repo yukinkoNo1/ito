@@ -21,7 +21,7 @@ export function toMemberDto(m: MemberRow): MemberDTO {
     color: m.color as MemberDTO['color'],
     role: m.role as MemberDTO['role'],
     disabled: m.disabledAt !== null,
-    createdAt: toIsoJst(m.createdAt),
+    createdAt: toIsoJst(m.createdAt, true),
   };
 }
 
@@ -39,7 +39,7 @@ export function toMeDto(m: MemberRow): MeDTO {
     role: m.role as MeDTO['role'],
     aliases,
     settings: readMemberSettings(m.settings),
-    activityReadAt: m.activityReadAt > 0 ? toIsoJst(m.activityReadAt) : null,
+    activityReadAt: m.activityReadAt > 0 ? toIsoJst(m.activityReadAt, true) : null,
   };
 }
 

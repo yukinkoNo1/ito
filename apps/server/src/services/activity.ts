@@ -130,7 +130,7 @@ function toDto(row: ActivityRow, me: MemberRow): ActivityDTO {
     eventId: row.eventId,
     title: row.title,
     detail,
-    createdAt: toIsoJst(row.createdAt),
+    createdAt: toIsoJst(row.createdAt, true),
     unread: row.createdAt > me.activityReadAt && row.actorId !== me.id,
   };
 }

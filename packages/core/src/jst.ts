@@ -166,14 +166,18 @@ export function startOfWeek(date: DateISO, weekStart: 0 | 1): DateISO {
   return addDays(date, -back);
 }
 
-/** '2026-10-03T07:00:00+09:00' */
-export function toIsoJst(ms: number): string {
+/**
+ * '2026-10-03T07:00:00+09:00'。withMs なら '2026-10-03T07:00:00.123+09:00'
+ * （作成・更新の時刻は新着の印の比べ合わせに使うので、ミリ秒まで出す）
+ */
+export function toIsoJst(ms: number, withMs = false): string {
   const p = toJstParts(ms);
-  return `${p.date}T${p.time}:${pad2(p.second)}+09:00`;
+  const frac = withMs ? `.${String(((ms % 1000) + 1000) % 1000).padStart(3, '0')}` : '';
+  return `${p.date}T${p.time}:${pad2(p.second)}${frac}+09:00`;
 }
 
 const ISO_RE =
-  /^(\d{4}-\d{2}-\d{2})T(\d{2}):(\d{2})(?::(\d{2})(?:\.\d{1,3})?)?(Z|[+-]\d{2}:\d{2})$/;
+  /^(\d{4}-\d{2}-\d{2})T(\d{2}):(\d{2})(?::(\d{2})(?:\.(\d{1,3}))?)?(Z|[+-]\d{2}:\d{2})$/;
 
 /** オフセット付きの ISO 8601 → epoch ミリ秒。形式が違えば null */
 export function parseIsoToMs(value: string): number | null {
@@ -184,8 +188,9 @@ export function parseIsoToMs(value: string): number | null {
   const hour = Number(m[2]);
   const minute = Number(m[3]);
   const second = m[4] ? Number(m[4]) : 0;
+  const millis = m[5] ? Number(m[5].padEnd(3, '0')) : 0;
   if (hour > 23 || minute > 59 || second > 59) return null;
-  const tz = m[5] as string;
+  const tz = m[6] as string;
   let offsetMin = 0;
   if (tz !== 'Z') {
     const sign = tz.startsWith('-') ? -1 : 1;
@@ -194,7 +199,7 @@ export function parseIsoToMs(value: string): number | null {
     offsetMin = sign * (oh * 60 + om);
   }
   const { year, month, day } = parseDate(date);
-  const ms = Date.UTC(year, month - 1, day, hour, minute, second);
+  const ms = Date.UTC(year, month - 1, day, hour, minute, second, millis);
   if (Number.isNaN(ms)) return null;
   return ms - offsetMin * MINUTE_MS;
 }

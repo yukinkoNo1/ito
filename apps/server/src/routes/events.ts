@@ -85,7 +85,7 @@ export function registerEventRoutes(app: App, deps: AppDeps): void {
     const me = c.get('me');
     const items = listTrash(db, clock, me).map((t) => ({
       event: t.event,
-      deletedAt: toIsoJst(t.deletedAt),
+      deletedAt: toIsoJst(t.deletedAt, true),
       deletedBy: t.deletedBy,
     }));
     return c.json({ items });

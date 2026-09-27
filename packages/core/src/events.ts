@@ -301,8 +301,8 @@ export function recordToDto(r: EventRecord): EventDTO {
     ownerId: r.ownerId,
     createdBy: r.createdBy,
     updatedBy: r.updatedBy,
-    createdAt: toIsoJst(r.createdAt),
-    updatedAt: toIsoJst(r.updatedAt),
+    createdAt: toIsoJst(r.createdAt, true),
+    updatedAt: toIsoJst(r.updatedAt, true),
   };
   return r.allDay
     ? { ...base, startDate: r.startDate as string, endDate: r.endDate as string }

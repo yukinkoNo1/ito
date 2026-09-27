@@ -56,6 +56,10 @@ describe('jst（SPEC §11）', () => {
     expect(parseIsoToMs('2026-10-03T07:00:00+09:00')).toBe(ms);
     expect(parseIsoToMs('2026-10-02T22:00:00Z')).toBe(ms);
     expect(parseIsoToMs('2026-10-03 07:00')).toBeNull();
+    // 作成・更新の時刻はミリ秒まで（新着の印の比べ合わせ）
+    expect(toIsoJst(ms + 123, true)).toBe('2026-10-03T07:00:00.123+09:00');
+    expect(parseIsoToMs('2026-10-03T07:00:00.123+09:00')).toBe(ms + 123);
+    expect(parseIsoToMs('2026-10-03T07:00:00.5+09:00')).toBe(ms + 500);
     expect(parseIsoToMs('2026-02-30T07:00:00+09:00')).toBeNull();
   });
 
