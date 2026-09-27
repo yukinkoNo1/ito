@@ -1,0 +1,30 @@
+{
+  "name": "ito",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@10.34.5",
+  "engines": {
+    "node": ">=22.12"
+  },
+  "scripts": {
+    "dev": "pnpm --parallel --filter @ito/server --filter @ito/web run dev",
+    "check": "biome check . && pnpm run typecheck && vitest run",
+    "lint": "biome check .",
+    "format": "biome check --write .",
+    "typecheck": "pnpm -r --workspace-concurrency=1 run typecheck && tsc -p tsconfig.json",
+    "test": "vitest run",
+    "build": "pnpm --filter @ito/web run build && pnpm --filter @ito/server run build",
+    "test:e2e": "pnpm --filter @ito/web run build:e2e && pnpm --filter @ito/server run build && playwright test",
+    "db:generate": "pnpm --filter @ito/server run db:generate",
+    "db:migrate": "pnpm --filter @ito/server run db:migrate",
+    "seed": "pnpm --filter @ito/server run seed",
+    "feed-token": "pnpm --filter @ito/server run --silent cli feed-token"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "2.5.14",
+    "@playwright/test": "1.63.0",
+    "@types/node": "24.19.0",
+    "typescript": "7.0.2",
+    "vitest": "5.0.2"
+  }
+}

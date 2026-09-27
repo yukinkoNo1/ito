@@ -1,0 +1,12 @@
+packages:
+  - apps/*
+  - packages/*
+
+# pnpm 10: 依存のビルドスクリプトは許可したものだけ動かす（SPEC §8・§18 T13）
+onlyBuiltDependencies:
+  - esbuild
+
+# better-sqlite3 13 は N-API のビルド済みバイナリ（prebuilds/）を同梱し、ビルド不要（gypfile: false）。
+# pnpm 10 は binding.gyp を見て node-gyp を走らせてしまうので、ビルドスクリプトを動かさない
+ignoredBuiltDependencies:
+  - better-sqlite3
