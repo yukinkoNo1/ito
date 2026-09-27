@@ -20,6 +20,7 @@ export function TrashContainer() {
   const showToast = toast.show;
   const navigate = useNavigate();
   const [items, setItems] = useState<TrashItemDTO[]>([]);
+  const [status, setStatus] = useState<'loading' | 'offline' | 'ready'>('loading');
 
   const load = useCallback(async () => {
     try {
@@ -27,7 +28,9 @@ export function TrashContainer() {
       const parsed = trashResponse.safeParse(res.body);
       if (res.status !== 200 || !parsed.success) throw new Error('trash');
       setItems(parsed.data.items);
+      setStatus('ready');
     } catch {
+      setStatus((s) => (s === 'ready' ? s : 'offline'));
       showToast({
         kind: 'error',
         message: 'ゴミ箱はオンラインで見られます（家のサーバーにつながりません）',
@@ -44,6 +47,7 @@ export function TrashContainer() {
     <TrashScreen
       items={buildTrash(items, members, now)}
       onBack={() => goBack(navigate, '/settings')}
+      status={status}
       onRestore={(eventId) =>
         void store.restoreEvent(eventId).then((ok) => {
           showToast({

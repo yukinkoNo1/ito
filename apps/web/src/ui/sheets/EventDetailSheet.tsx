@@ -180,6 +180,7 @@ export function ConflictSheet({
   mine,
   theirs,
   theirsByName,
+  deleted,
   members,
   onKeepTheirs,
   onKeepMine,
@@ -187,6 +188,12 @@ export function ConflictSheet({
   onClose,
 }: ConflictSheetProps) {
   if (!open) return null;
+  const text =
+    deleted === 'mine'
+      ? `この予定を削除しましたが、そのあいだに${theirsByName}さんが変更していました。「家族の変更を使う」なら予定は残り、「自分の変更で上書き」なら削除します。`
+      : deleted === 'theirs'
+        ? `${theirsByName}さんがこの予定を削除していました。「家族の変更を使う」なら削除のまま、「自分の変更で上書き」「両方残す」なら自分の変更を新しい予定として残します。`
+        : `${theirsByName}さんとぶつかりました。${differenceText(mine, theirs, members)}`;
   return (
     <div className="subsheet-backdrop">
       <section
@@ -199,9 +206,7 @@ export function ConflictSheet({
           <strong>変更のぶつかりを解決</strong>
           <Button onClick={onClose}>閉じる</Button>
         </div>
-        <p>
-          {theirsByName}さんとぶつかりました。{differenceText(mine, theirs, members)}
-        </p>
+        <p>{text}</p>
         <Button onClick={onKeepTheirs}>家族の変更を使う</Button>
         <Button onClick={onKeepMine}>自分の変更で上書き</Button>
         <Button onClick={onKeepBoth}>両方残す</Button>
@@ -289,7 +294,14 @@ export default function EventDetailSheet({
           dragStart.current = undefined;
         }}
         onTouchStart={(touchEvent) => {
-          dragStart.current = touchEvent.touches[0]?.clientY;
+          // つまみ・見出しから、または中身が一番上のときだけ引き下ろしで閉じる。重ねた小さなシートの中は数えない
+          const target = touchEvent.target as Element;
+          const scroll = touchEvent.currentTarget.querySelector('.full-sheet-scroll');
+          const fromHandle = target.closest('.sheet-grabber, .full-sheet-header');
+          const inSubsheet = target.closest('.subsheet-backdrop');
+          const atTop = (scroll?.scrollTop ?? 0) <= 0;
+          dragStart.current =
+            !inSubsheet && (fromHandle || atTop) ? touchEvent.touches[0]?.clientY : undefined;
         }}
         role="dialog"
       >

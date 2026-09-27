@@ -64,12 +64,12 @@ export function FlowContainer() {
       to,
       selectedDate,
       weekStart,
-      sync,
       unreadActivity: unread,
       notice: notice ? INSTALL_NOTICE : null,
       showBackToToday: selectedDate !== ctx.today,
     });
-  }, [ctx, events, filter, from, to, selectedDate, weekStart, sync, unread, notice]);
+    // sync は一覧の組み立てに使わない（60 秒ごとの同期で一覧を作り直さない）
+  }, [ctx, events, filter, from, to, selectedDate, weekStart, unread, notice]);
 
   if (!data || !today || !selectedDate || !from || !to) {
     return <p className="detail-meta">読み込み中…（家のサーバーにつながると表示されます）</p>;
@@ -85,11 +85,11 @@ export function FlowContainer() {
     const target = clamp(date);
     const same = target === selectedDate;
     setSelected(target === today ? null : target);
-    // 表示の範囲の外なら、その日まで続けて広げる（昨日〜未来へ連続する一覧のまま）
+    // 表示の範囲の外なら、その日の前後 8 週に置き換える（§19。今日から遠くても一度に何年分も作らない）
     if (target < from || target >= to) {
       setRange({
-        from: target < from ? addDays(target, -1) : from,
-        to: target >= to ? addDays(target, FLOW_WINDOW_DAYS) : to,
+        from: addDays(target, -FLOW_WINDOW_DAYS),
+        to: addDays(target, FLOW_WINDOW_DAYS),
       });
     }
     // 同じ日をもう一度選んだとき（スクロールで離れたあと）は、その日へ合わせ直す
@@ -103,6 +103,7 @@ export function FlowContainer() {
   return (
     <UpcomingScreen
       {...data}
+      sync={sync}
       onComposeOnDate={(date) => nav.openComposer({ date })}
       onJumpToDate={jumpTo}
       onJumpToFresh={() =>

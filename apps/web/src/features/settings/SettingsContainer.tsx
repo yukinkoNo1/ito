@@ -2,7 +2,7 @@ import { type AdminMemberDTO, adminMemberDtoSchema } from '@ito/core';
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router';
 import { z } from 'zod';
-import { applyTheme, readTextSize, saveTextSize, type TextSize } from '../../app/appearance';
+import { readTextSize, saveTextSize, setTheme, type TextSize } from '../../app/appearance';
 import { useData, useMe, useMembers } from '../../app/data-context';
 import { sendOnline } from '../../app/online-actions';
 import { useToast } from '../../app/toast';
@@ -87,9 +87,12 @@ export function SettingsContainer() {
         setTextSize(size);
       }}
       onChangeTheme={(theme) => {
-        // すぐに当ててから保存する（保存できなければ、次の同期で元のテーマに戻る）
-        applyTheme(theme);
-        void patchMe({ settings: { theme } });
+        // すぐに当ててから保存する。保存できなければ、家族の設定のテーマに戻す
+        const before = me.settings.theme;
+        setTheme(theme);
+        void patchMe({ settings: { theme } }).then((ok) => {
+          if (!ok) setTheme(before);
+        });
       }}
       onChangeWeekStart={(weekStart) => void patchMe({ settings: { weekStart } })}
       onEnableNotifications={() => {}}

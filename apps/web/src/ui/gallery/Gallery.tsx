@@ -20,7 +20,9 @@ import {
   mockContext,
   mockDetail,
   mockEvents,
+  mockEvents8,
   mockFreeTime,
+  mockMembers8,
   mockMemberVMs,
   mockOccurrence,
   mockQuickDates,
@@ -48,59 +50,12 @@ import EventDetailSheet, {
   RecurrenceScopeDialog,
 } from '../sheets/EventDetailSheet';
 import type { FlowScreenProps, SyncVM, TabId, ToastVM } from '../types';
+import { SCENARIOS, type Scenario } from './scenarios';
 
 /**
  * 状態のギャラリー（/__gallery。開発と E2E 用のビルドにだけ入る。RUNBOOK 3.・§24 D31）。
  * ?s=<状態>&theme=dark&bare=1（bare は枠なしで、本番の画面とスクリーンショットを比べるため）
  */
-
-const SCENARIOS = [
-  ['flow', 'これから'],
-  ['flow-self', 'これから・自分だけ'],
-  ['flow-fresh', 'これから・新着'],
-  ['flow-empty', 'これから・予定ゼロ'],
-  ['flow-offline', 'これから・つながらない'],
-  ['flow-blocked', 'これから・更新が必要'],
-  ['flow-first', 'これから・ホームの案内'],
-  ['flow-away', 'これから・今日に戻る'],
-  ['flow-toast', 'これから・元に戻す'],
-  ['flow-large', 'これから・文字大きめ'],
-  ['month', '月'],
-  ['month-next', '月・翌月'],
-  ['month-monday', '月・月曜始まり'],
-  ['write', '書く・開いた直後'],
-  ['write-chips', '書く・札を選んだ'],
-  ['write-detail', '書く・くわしく'],
-  ['write-ambiguous', '書く・あいまい'],
-  ['write-offline', '書く・オフライン'],
-  ['write-error', '書く・エラー'],
-  ['edit', '直す'],
-  ['detail', '詳細'],
-  ['detail-multiday', '詳細・複数日'],
-  ['detail-private', '詳細・他人の非公開'],
-  ['detail-field', '詳細・日時を直す'],
-  ['detail-conflict', '詳細・競合'],
-  ['detail-scope', '詳細・範囲を選ぶ'],
-  ['free', '空き・候補あり'],
-  ['free-empty', '空き・候補なし'],
-  ['settings', '設定'],
-  ['settings-off', '設定・通知オフ'],
-  ['settings-large', '設定・文字大きめ'],
-  ['members', '家族の管理'],
-  ['history', '履歴・未読'],
-  ['history-read', '履歴・既読'],
-  ['trash', 'ゴミ箱'],
-  ['trash-empty', 'ゴミ箱・空'],
-  ['search', '検索・最近'],
-  ['search-results', '検索・結果'],
-  ['search-empty', '検索・結果なし'],
-  ['onboarding', 'はじめて・色'],
-  ['onboarding-howto', 'はじめて・使い方'],
-  ['install-ios', '追加ガイド・iPhone'],
-  ['install-android', '追加ガイド・Android'],
-] as const;
-
-type Scenario = (typeof SCENARIOS)[number][0];
 
 const noop = () => {};
 const SYNCED = toSyncVM('synced', MOCK_NOW, 0);
@@ -180,8 +135,12 @@ const flowHandlers: Pick<
 
 /** 本番のこれから（FlowContainer）と同じ組み立て */
 function Flow({ scenario, overlay }: { scenario: Scenario; overlay?: ReactNode }) {
-  const events = scenario === 'flow-empty' ? [] : mockEvents();
-  const ctx = mockContext(scenario === 'flow-fresh' ? { freshSince: MOCK_FRESH_SINCE } : {});
+  const eight = scenario === 'flow-8';
+  const events = scenario === 'flow-empty' ? [] : eight ? mockEvents8() : mockEvents();
+  const ctx = mockContext({
+    ...(scenario === 'flow-fresh' ? { freshSince: MOCK_FRESH_SINCE } : {}),
+    ...(eight ? { members: mockMembers8 } : {}),
+  });
   const sync =
     scenario === 'flow-offline'
       ? toSyncVM('offline', MOCK_NOW - 12 * 60_000, 2)
@@ -196,7 +155,6 @@ function Flow({ scenario, overlay }: { scenario: Scenario; overlay?: ReactNode }
     to: addDays(MOCK_TODAY, FLOW_WINDOW_DAYS),
     selectedDate: MOCK_TODAY,
     weekStart: 0,
-    sync,
     unreadActivity: scenario === 'flow-fresh' ? 2 : 0,
     notice:
       scenario === 'flow-first'
@@ -214,7 +172,7 @@ function Flow({ scenario, overlay }: { scenario: Scenario; overlay?: ReactNode }
       : null;
   return (
     <Shell current="flow" overlay={overlay} sync={sync} toast={toast}>
-      <UpcomingScreen {...data} {...flowHandlers} />
+      <UpcomingScreen {...data} {...flowHandlers} sync={sync} />
     </Shell>
   );
 }
@@ -371,6 +329,7 @@ function Detail({ scenario }: { scenario: Scenario }) {
             onKeepTheirs={noop}
             open={scenario === 'detail-conflict'}
             theirs={conflict.theirs}
+            deleted={null}
             theirsByName="お母さん"
           />
           <RecurrenceScopeDialog
@@ -455,7 +414,9 @@ function Screen({ scenario }: { scenario: Scenario }) {
     return (
       <Shell current="flow">
         <HistoryScreen
+          hasMore={false}
           items={mockActivity(scenario === 'history-read')}
+          status="ready"
           members={mockMemberVMs}
           onBack={noop}
           onLoadMore={noop}
@@ -471,6 +432,7 @@ function Screen({ scenario }: { scenario: Scenario }) {
           items={scenario === 'trash-empty' ? [] : mockTrash()}
           onBack={noop}
           onRestore={noop}
+          status="ready"
         />
       </Shell>
     );
@@ -520,13 +482,20 @@ function Screen({ scenario }: { scenario: Scenario }) {
   );
 }
 
-function readParams(): { scenario: Scenario; theme: 'light' | 'dark'; bare: boolean } {
+function readParams(): {
+  scenario: Scenario;
+  theme: 'light' | 'dark';
+  bare: boolean;
+  large: boolean;
+} {
   const p = new URLSearchParams(window.location.search);
   const s = p.get('s');
   return {
     scenario: isScenario(s) ? s : 'flow',
     theme: p.get('theme') === 'dark' ? 'dark' : 'light',
     bare: p.get('bare') === '1',
+    // large=1 ならどの状態も「大きめ」で描く（E2E の確かめ用）
+    large: p.get('large') === '1',
   };
 }
 
@@ -534,7 +503,7 @@ export default function Gallery() {
   const initial = useMemo(readParams, []);
   const [scenario, setScenario] = useState<Scenario>(initial.scenario);
   const [theme, setTheme] = useState<'light' | 'dark'>(initial.theme);
-  const large = scenario === 'flow-large' || scenario === 'settings-large';
+  const large = initial.large || scenario === 'flow-large' || scenario === 'settings-large';
 
   // 本番と同じく html の属性でテーマと文字の大きさを切り替える（§22）
   useEffect(() => {

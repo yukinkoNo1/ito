@@ -50,6 +50,7 @@ export function quickDates(today: DateISO): { label: string; date: DateISO }[] {
 /**
  * 最近の予定（§16 F-22）: 端末の DB の過去 90 日の予定名を回数順に最大 5 件。
  * よく使う人と開始時刻（最頻値）を添え、タップで予定名・人・時刻をまとめて入れる。
+ * 他人の非公開（件名 null）と例外行は数えない。自分の非公開から来た候補は非公開のまま入れる（§14）
  */
 export function recentSuggestions(
   events: LocalEvent[],
@@ -65,6 +66,7 @@ export function recentSuggestions(
       times: Map<string, number>;
       everyone: number;
       last: number;
+      private: boolean;
     }
   >();
   for (const e of events) {
@@ -80,8 +82,10 @@ export function recentSuggestions(
       times: new Map(),
       everyone: 0,
       last: 0,
+      private: false,
     };
     entry.count++;
+    if (e.visibility === 'private') entry.private = true;
     entry.last = Math.max(entry.last, created);
     if (e.forEveryone) entry.everyone++;
     else for (const id of e.memberIds) entry.members.set(id, (entry.members.get(id) ?? 0) + 1);
@@ -103,12 +107,19 @@ export function recentSuggestions(
       const everyone = entry.everyone > (memberId ? (entry.members.get(memberId) ?? 0) : 0);
       const time = top(entry.times);
       const patch: Partial<EventDraftVM> = { title };
-      if (everyone) Object.assign(patch, { forEveryone: true, memberIds: [] });
+      const meId = members.find((m) => m.isMe)?.id;
+      if (entry.private && meId) {
+        Object.assign(patch, { isPrivate: true, forEveryone: false, memberIds: [meId] });
+      } else if (everyone) Object.assign(patch, { forEveryone: true, memberIds: [] });
       else if (memberId) Object.assign(patch, { forEveryone: false, memberIds: [memberId] });
       if (time && time !== 'allday') Object.assign(patch, { allDay: false, startTime: time });
       else if (time === 'allday')
         Object.assign(patch, { allDay: true, startTime: null, endTime: null });
-      const who = everyone ? '全員' : (members.find((m) => m.id === memberId)?.mark ?? null);
+      const who = entry.private
+        ? '非公開'
+        : everyone
+          ? '全員'
+          : (members.find((m) => m.id === memberId)?.mark ?? null);
       const hint = [who, time && time !== 'allday' ? time : time === 'allday' ? '終日' : null]
         .filter(Boolean)
         .join(' · ');
@@ -153,13 +164,27 @@ export function buildComposerVM(input: {
     ambiguities: [],
     overlaps: [],
     examples: COMPOSER_EXAMPLES,
-    quickDates: quickDates(input.today),
+    quickDates: withDraftDate(quickDates(input.today), input.draft),
     quickTimes: QUICK_TIMES,
     suggestions: input.editing ? [] : recentSuggestions(input.events, input.nowMs, input.members),
     saveLabel: saveLabelFor(input.draft, input.editing),
     saving: input.saving,
     error: input.error,
   };
+}
+
+/** 選んでいる日が札になければ、その日の札を足す（どの日に書くかが画面に見えるように） */
+function withDraftDate(
+  dates: { label: string; date: DateISO }[],
+  draft: EventDraftVM | null,
+): { label: string; date: DateISO }[] {
+  if (!draft?.startDate || dates.some((d) => d.date === draft.startDate)) return dates;
+  return [...dates, { label: formatMdW(draft.startDate), date: draft.startDate }];
+}
+
+/** 選べる日付の範囲（今日から −1 年〜+3 年。日付の入力の min・max。§16 の検証と合わせる） */
+export function dateRange(today: DateISO): { min: DateISO; max: DateISO } {
+  return { min: addDays(today, -366), max: addDays(today, 366 * 3) };
 }
 
 /** 日付を選べるか（今日から −1 年〜+3 年。§16 の検証と合わせる） */

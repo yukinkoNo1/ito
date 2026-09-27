@@ -39,10 +39,12 @@ export function applyDraftPatch(
     draft.startTime &&
     draft.endTime
   ) {
-    const length =
+    let length =
       diffDays(draft.startDate, draft.endDate) * MINUTES_PER_DAY +
       minutesOfTime(draft.endTime) -
       minutesOfTime(draft.startTime);
+    // 終わりの時刻が開始以前で同じ日なら翌日（draftToInput と同じ読み方。22:00〜0:00 など）
+    if (length <= 0) length += MINUTES_PER_DAY;
     if (length > 0 && length < MINUTES_PER_DAY) {
       const end = minutesOfTime(patch.startTime) + length;
       next.endTime = timeFromMinutes(end % MINUTES_PER_DAY);

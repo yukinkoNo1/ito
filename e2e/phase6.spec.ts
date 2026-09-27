@@ -1,5 +1,6 @@
 import AxeBuilder from '@axe-core/playwright';
 import type { APIRequestContext, Page, TestInfo } from '@playwright/test';
+import { SCENARIOS } from '../apps/web/src/ui/gallery/scenarios';
 import {
   MOCK_EVENTS,
   MOCK_MEMBERS,
@@ -333,25 +334,29 @@ const OVERLAYS: { name: string; open: (page: Page) => Promise<void> }[] = [
 async function horizontalOverflow(page: Page): Promise<string[]> {
   return page.evaluate(() => {
     const width = window.innerWidth;
-    const scrollsX = (el: Element | null): boolean => {
-      for (let e = el; e && e !== document.body; e = e.parentElement) {
-        const o = getComputedStyle(e).overflowX;
-        if (o === 'auto' || o === 'scroll') return true;
-      }
-      return false;
-    };
+    // わざと横にスクロールする札の列（styles.css の overflow-x: auto と、7 個以上の人の札）
+    const RAILS = '.option-rail, .suggestion-list, .gallery-group, .member-filters';
     const out: string[] = [];
     if (document.documentElement.scrollWidth > width + 1)
       out.push(`page ${document.documentElement.scrollWidth}`);
     for (const el of document.querySelectorAll(
-      '#root button, #root p, #root strong, #root span, #root input',
+      '#root button, #root p, #root strong, #root span, #root input, #root time, #root small',
     )) {
       const r = el.getBoundingClientRect();
-      if (r.width === 0 || r.height === 0) continue;
-      if ((r.right > width + 1 || r.left < -1) && !scrollsX(el.parentElement)) {
+      if (r.width === 0 || r.height === 0 || el.closest(RAILS)) continue;
+      if (r.right > width + 1 || r.left < -1) {
         out.push(
           `${el.tagName}.${el.className} "${(el.textContent ?? '').slice(0, 20)}" ${Math.round(r.left)}-${Math.round(r.right)}`,
         );
+      }
+    }
+    // 縦にスクロールする箱の中で、横にはみ出していないか（箱の中に隠れた横スクロール）
+    for (const el of document.querySelectorAll('#root *')) {
+      if (el.matches(RAILS)) continue;
+      const style = getComputedStyle(el);
+      if (!['auto', 'scroll'].includes(style.overflowY)) continue;
+      if (el.scrollWidth > el.clientWidth + 1) {
+        out.push(`scroll box .${el.className} ${el.scrollWidth}>${el.clientWidth}`);
       }
     }
     return out.slice(0, 10);
@@ -414,6 +419,10 @@ test.describe('画面ごとの確かめ', () => {
       expect(await page.evaluate(() => document.documentElement.dataset.textSize), s.path).toBe(
         'large',
       );
+      expect(
+        await page.evaluate(() => getComputedStyle(document.documentElement).fontSize),
+        s.path,
+      ).toBe('18.4px');
       expect(await horizontalOverflow(page), s.path).toEqual([]);
     }
     for (const o of OVERLAYS) {
@@ -465,6 +474,131 @@ test.describe('はじめての端末', () => {
     await page.getByRole('button', { name: '次へ' }).click();
     await expect(page.getByRole('button', { name: 'はじめる' })).toBeVisible();
     expect(await axeViolations(page)).toEqual([]);
+  });
+});
+
+/* ───────── ギャラリーの全部の状態（C-02・C-03・C-05・案内・他人の非公開・8 人家族など）でも ───────── */
+
+test.describe('ギャラリーの全部の状態で、axe・44px・大きめ', () => {
+  for (const theme of ['light', 'dark'] as const) {
+    test(`axe の違反がなく、タップ領域は 44px 以上（${theme === 'light' ? 'ライト' : 'ダーク'}）`, async ({
+      page,
+    }) => {
+      test.setTimeout(180_000);
+      await page.emulateMedia({ colorScheme: theme });
+      const found: Record<string, string[]> = {};
+      for (const [key] of SCENARIOS) {
+        await page.goto(`/__gallery?s=${key}&bare=1&theme=${theme}`);
+        await expect(page.locator('#root main').first()).toBeVisible();
+        const v = [...(await axeViolations(page)), ...(await smallTargets(page))];
+        if (v.length > 0) found[key] = v;
+      }
+      expect(found).toEqual({});
+    });
+  }
+
+  test('「大きめ」でも横にはみ出さない', async ({ page }) => {
+    test.setTimeout(180_000);
+    const found: Record<string, string[]> = {};
+    for (const [key] of SCENARIOS) {
+      await page.goto(`/__gallery?s=${key}&bare=1&large=1`);
+      await expect(page.locator('#root main').first()).toBeVisible();
+      const v = await horizontalOverflow(page);
+      if (v.length > 0) found[key] = v;
+    }
+    expect(found).toEqual({});
+  });
+});
+
+test.describe('本番の画面の細部（Phase 6 のレビュー）', () => {
+  async function touch(page: Page, selector: string, fromY: number, toY: number) {
+    await page.evaluate(
+      ({ selector, fromY, toY }) => {
+        const target = document.querySelector(selector);
+        if (!target) throw new Error(`見つからない: ${selector}`);
+        const make = (y: number) => new Touch({ identifier: 1, target, clientX: 100, clientY: y });
+        target.dispatchEvent(
+          new TouchEvent('touchstart', {
+            bubbles: true,
+            touches: [make(fromY)],
+            changedTouches: [make(fromY)],
+          }),
+        );
+        target.dispatchEvent(
+          new TouchEvent('touchend', { bubbles: true, touches: [], changedTouches: [make(toY)] }),
+        );
+      },
+      { selector, fromY, toY },
+    );
+  }
+
+  test('シートは中身のスクロールでは閉じず、つまみからの引き下ろしで閉じる', async ({ page }) => {
+    await page.goto('/');
+    await composerTrigger(page).click();
+    const composer = page.getByRole('dialog', { name: '予定を書く' });
+    await composer.getByRole('button', { name: 'くわしく' }).click();
+    await page.locator('.composer-sheet .full-sheet-scroll').evaluate((el) => {
+      el.scrollTop = 200;
+    });
+    await touch(page, '.composer-sheet .composer-details', 300, 420);
+    await expect(composer).toBeVisible();
+    await touch(page, '.composer-sheet .sheet-grabber', 20, 140);
+    await expect(composer).toBeHidden();
+
+    await homeList(page).getByRole('button', { name: /夕食/ }).click();
+    const detail = page.getByRole('dialog', { name: '予定の詳細' });
+    await detail.getByRole('button', { name: /^日時/ }).click();
+    await touch(page, '.detail-subsheet', 400, 520);
+    await expect(detail).toBeVisible();
+    await expect(page.getByRole('dialog', { name: '日時を直す' })).toBeVisible();
+  });
+
+  test('日付をまたぐ予定の時刻は、予定名に重ならない', async ({ page }) => {
+    await page.goto('/');
+    await page.getByRole('button', { name: '10月3日 木曜日へ移動' }).click();
+    const row = page.locator('[data-date="2030-10-03"] .event-row', { hasText: '夜釣り' });
+    await expect(row).toContainText('→翌01:00');
+    const time = await row.locator('.event-time').boundingBox();
+    const copy = await row.locator('.event-copy').boundingBox();
+    if (!time || !copy) throw new Error('行が見えない');
+    expect(time.x + time.width).toBeLessThanOrEqual(copy.x + 1);
+  });
+
+  test('広い画面では中央に寄せて最大 480px（§19）', async ({ page }) => {
+    await page.setViewportSize({ width: 1024, height: 768 });
+    await page.goto('/');
+    const box = await page.locator('.app-shell').boundingBox();
+    if (!box) throw new Error('画面が見えない');
+    expect(box.width).toBeLessThanOrEqual(480);
+    expect(Math.abs(box.x - (1024 - box.width) / 2)).toBeLessThanOrEqual(1);
+  });
+
+  test('まとめの文に「新しい予定」が二重に出ない', async ({ page }) => {
+    await page.goto('/');
+    await expect(page.locator('.today-summary > span')).not.toContainText('新しい予定');
+  });
+});
+
+test.describe('家族として登録されていない端末', () => {
+  test.use({
+    onboarded: false,
+    allowedConsoleErrors: { patterns: [/status of 403 .*\(http:\/\/localhost:8788\/api\//] },
+  });
+
+  test('はじめての画面で、同期が止まった理由と「再試行」を出す（C-02）', async ({
+    page,
+    context,
+  }) => {
+    await context.addInitScript(() => {
+      try {
+        localStorage.setItem('ito.devLogin', 'stranger@example.com');
+      } catch {}
+    });
+    await page.goto('/welcome');
+    await expect(page.getByRole('status')).toContainText(
+      'このアカウント（stranger@example.com）は家族として登録されていません',
+    );
+    await expect(page.getByRole('button', { name: '再試行' })).toBeVisible();
   });
 });
 

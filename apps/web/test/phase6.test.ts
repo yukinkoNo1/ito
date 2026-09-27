@@ -172,7 +172,6 @@ describe('これから（S-01）', () => {
       to: '2030-11-20',
       selectedDate: '2030-10-20',
       weekStart: 0,
-      sync: toSyncVM('synced', ctx.nowMs, 0),
       unreadActivity: 0,
       notice: null,
       showBackToToday: true,

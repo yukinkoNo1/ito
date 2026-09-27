@@ -9,11 +9,12 @@ import { OnboardingContainer } from '../features/onboarding/OnboardingContainer'
 import { SearchContainer } from '../features/search/SearchContainer';
 import { MembersContainer } from '../features/settings/MembersContainer';
 import { SettingsContainer } from '../features/settings/SettingsContainer';
+import { BareLayout } from '../features/shell/BareLayout';
 import { ShellLayout } from '../features/shell/ShellLayout';
 import { TrashContainer } from '../features/trash/TrashContainer';
 import { DEVICE_KEYS, readDevice } from '../pwa/device';
 import { registerServiceWorker } from '../pwa/register';
-import { applyTheme, readThemeSetting } from './appearance';
+import { readThemeSetting, setTheme } from './appearance';
 import { DataProvider, useMe } from './data-context';
 import { FreshProvider } from './fresh';
 import { NavProvider, useNav } from './nav';
@@ -38,7 +39,7 @@ function OnboardingGate({ children }: { children: ReactNode }) {
 /** テーマは家族の設定（me.settings.theme）に合わせる。まだ読めていなければ端末に写しておいたもの（§22） */
 function AppearanceSync() {
   const theme = useMe()?.settings.theme;
-  useEffect(() => applyTheme(theme ?? readThemeSetting()), [theme]);
+  useEffect(() => setTheme(theme ?? readThemeSetting()), [theme]);
   return null;
 }
 
@@ -48,8 +49,10 @@ function AppRoutes() {
   return (
     <OnboardingGate>
       <Routes location={base}>
-        <Route path="/welcome" element={<OnboardingContainer />} />
-        <Route path="/install" element={<InstallContainer />} />
+        <Route element={<BareLayout />}>
+          <Route path="/welcome" element={<OnboardingContainer />} />
+          <Route path="/install" element={<InstallContainer />} />
+        </Route>
         <Route element={<ShellLayout />}>
           <Route path="/" element={<FlowContainer />} />
           <Route path="/month/:ym?" element={<MonthContainer />} />

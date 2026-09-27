@@ -128,11 +128,13 @@ function WeekStrip({
 function DatePicker({
   initialDate,
   today,
+  weekStart,
   onClose,
   onSelectDate,
 }: {
   initialDate: DateISO;
   today: DateISO | null;
+  weekStart: 0 | 1;
   onClose: () => void;
   onSelectDate: (date: DateISO) => void;
 }) {
@@ -141,7 +143,8 @@ function DatePicker({
     return firstOfMonth(year, month);
   });
   const { year, month } = parseDate(shown);
-  const blanks = weekdayOf(shown);
+  const blanks = (weekdayOf(shown) - weekStart + 7) % 7;
+  const labels = [...WEEKDAY_LABELS.slice(weekStart), ...WEEKDAY_LABELS.slice(0, weekStart)];
   const days = daysInMonth(year, month);
   const move = (delta: number) => setShown(addMonths(shown, delta));
   return (
@@ -162,7 +165,7 @@ function DatePicker({
           </Button>
         </div>
         <div className="month-weekdays">
-          {WEEKDAY_LABELS.map((day) => (
+          {labels.map((day) => (
             <span key={day}>{day}</span>
           ))}
         </div>
@@ -216,9 +219,16 @@ export default function UpcomingScreen(props: FlowScreenProps) {
   const [datePickerOpen, setDatePickerOpen] = useState(false);
   const scrollRef = useRef<HTMLElement | null>(null);
   const me = members.find((m) => m.isMe);
-  const [datePart, weekdayPart] = headerDateLabel.split(' ');
-  const year = parseDate(selectedDate).year;
-  const today = week.find((cell) => cell.isToday)?.date ?? null;
+  // 見出しは今日（'2026年 9月27日 日曜日'）。年も今日から（移動した日の年ではない）
+  const [yearPart, datePart, weekdayPart] = headerDateLabel.split(' ');
+  const todayItem = items.find((item) => item.kind === 'day' && item.day.isToday);
+  const today =
+    todayItem?.kind === 'day'
+      ? todayItem.day.date
+      : (week.find((cell) => cell.isToday)?.date ?? null);
+  const weekStart = (week[0]?.weekday === 1 ? 1 : 0) as 0 | 1;
+  // 今日の日の見出しが見えなくなったら「今日に戻る」を出す（指でスクロールして離れたときも。§6.3）
+  const [awayFromToday, setAwayFromToday] = useState(false);
 
   // 初回表示で今日を先頭に合わせる
   useEffect(() => {
@@ -238,12 +248,19 @@ export default function UpcomingScreen(props: FlowScreenProps) {
     if (!root) return;
     const markUser = () => {
       userScrolled.current = true;
+      // 一覧が画面に収まってスクロールできないときも、触ったら続きを読む
+      if (root.scrollHeight - root.clientHeight < EDGE_PX) reachEnd.current();
     };
     const onScroll = () => {
       if (!userScrolled.current) return;
       if (root.scrollTop < EDGE_PX && prependFromBottom.current === null) {
-        prependFromBottom.current = root.scrollHeight - root.scrollTop;
+        const fromBottom = root.scrollHeight - root.scrollTop;
+        prependFromBottom.current = fromBottom;
         reachStart.current();
+        // これ以上前へ広げられなかったとき（一覧が変わらないとき）は、位置の保持をやめる
+        window.setTimeout(() => {
+          if (prependFromBottom.current === fromBottom) prependFromBottom.current = null;
+        }, 500);
       }
       if (root.scrollHeight - root.scrollTop - root.clientHeight < EDGE_PX) reachEnd.current();
     };
@@ -255,6 +272,25 @@ export default function UpcomingScreen(props: FlowScreenProps) {
       root.removeEventListener('scroll', onScroll);
     };
   }, []);
+  // biome-ignore lint/correctness/useExhaustiveDependencies: 一覧が作り直されると今日の見出しの要素も変わるので、見張り直す
+  useEffect(() => {
+    const root = scrollRef.current;
+    const target = today ? root?.querySelector(`#date-${CSS.escape(today)}`) : null;
+    if (!root || !target || typeof IntersectionObserver === 'undefined') {
+      setAwayFromToday(false);
+      return;
+    }
+    const observer = new IntersectionObserver(
+      (entries) => {
+        const entry = entries[entries.length - 1];
+        if (entry) setAwayFromToday(!entry.isIntersecting && userScrolled.current);
+      },
+      { root },
+    );
+    observer.observe(target);
+    return () => observer.disconnect();
+  }, [today, items]);
+
   // 前に足したときは、見ていた位置を保つ（Safari にはスクロールアンカーがない）
   useLayoutEffect(() => {
     const root = scrollRef.current;
@@ -286,7 +322,7 @@ export default function UpcomingScreen(props: FlowScreenProps) {
       )}
       <header className="topbar">
         <div>
-          <p className="eyebrow">{year}年</p>
+          <p className="eyebrow">{yearPart}</p>
           <p className="current-date">
             {datePart} <span>{weekdayPart}</span>
           </p>
@@ -324,7 +360,19 @@ export default function UpcomingScreen(props: FlowScreenProps) {
       />
 
       {/* biome-ignore lint/a11y/useSemanticElements: fieldset の既定の枠と flex の差を避けて見た目を変えない（role=group で同じ意味） */}
-      <div className="member-filters" aria-label="表示する人" role="group">
+      <div
+        aria-label="表示する人"
+        className="member-filters"
+        role="group"
+        style={
+          filters.length > 6
+            ? {
+                gridTemplateColumns: `repeat(${filters.length}, minmax(2.75rem, 1fr))`,
+                overflowX: 'auto',
+              }
+            : undefined
+        }
+      >
         {filters.map((filter) => (
           <Button
             aria-pressed={pressed(filter.value)}
@@ -420,7 +468,7 @@ export default function UpcomingScreen(props: FlowScreenProps) {
         <div className="flow-sentinel" />
       </section>
 
-      {showBackToToday && (
+      {(showBackToToday || awayFromToday) && (
         <BottomSlot>
           <Button className="return-today" onClick={props.onJumpToday}>
             今日に戻る
@@ -437,6 +485,7 @@ export default function UpcomingScreen(props: FlowScreenProps) {
             props.onJumpToDate(date);
           }}
           today={today}
+          weekStart={weekStart}
         />
       )}
     </>

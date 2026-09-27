@@ -43,9 +43,12 @@ export function groupByDay(
     }
     return v;
   };
+  const active = new Set(activeMembers(ctx.members).map((m) => m.id));
   for (const raw of occurrencesBetween(events, from, to)) {
     const occ = toOccurrenceVM(raw, ctx);
     if (!matchesFilter(occ, filter)) continue;
+    // 無効にした家族だけが担当の回は出さない（人の札が空になるため。表示用フィードと同じ。§13.1・§24 D32）
+    if (!occ.forEveryone && !occ.memberIds.some((id) => active.has(id))) continue;
     if (raw.allDay) {
       const first = raw.startDate < from ? from : raw.startDate;
       const last = raw.endDate >= to ? addDays(to, -1) : raw.endDate;

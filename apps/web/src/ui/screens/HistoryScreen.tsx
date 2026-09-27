@@ -12,6 +12,8 @@ const ACTION_LABEL: Record<ActivityVM['action'], string> = {
 /** S-08 履歴（開くと既読） */
 export default function HistoryScreen({
   items,
+  status,
+  hasMore,
   members,
   onBack,
   onOpenEvent,
@@ -36,7 +38,13 @@ export default function HistoryScreen({
         <span />
       </header>
       <section className="secondary-scroll">
-        {groups.length === 0 && (
+        {groups.length === 0 && status !== 'ready' && (
+          <div className="secondary-empty" role="status">
+            <strong>{status === 'loading' ? '読み込み中…' : '履歴はオンラインで見られます'}</strong>
+            {status === 'offline' && <p>家のサーバーにつながりません（Tailscale を確認）</p>}
+          </div>
+        )}
+        {groups.length === 0 && status === 'ready' && (
           <div className="secondary-empty">
             <strong>まだ履歴はありません</strong>
             <p>家族が予定を追加・変更すると、ここに出ます。</p>
@@ -72,7 +80,7 @@ export default function HistoryScreen({
             </div>
           </div>
         ))}
-        {items.length >= 50 && (
+        {hasMore && (
           <Button className="history-more" onClick={onLoadMore}>
             もっと見る
           </Button>

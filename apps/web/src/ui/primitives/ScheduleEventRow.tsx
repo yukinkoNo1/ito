@@ -19,6 +19,10 @@ export const occurrenceTimeLabel = (occ: OccurrenceVM) => {
   return occ.startTime ?? '';
 };
 
+/** 日付をまたぐときの終わり（時刻の列の 2 行目に出す） */
+const nextDayEnd = (occ: OccurrenceVM) =>
+  !occ.allDay && occ.startDate !== occ.endDate && occ.endTime ? `→翌${occ.endTime}` : null;
+
 export default function ScheduleEventRow({
   occ,
   members,
@@ -60,7 +64,8 @@ export default function ScheduleEventRow({
               <i />新
             </span>
           )}
-          <time>{occurrenceTimeLabel(occ)}</time>
+          <time>{occ.allDay ? '終日' : (occ.startTime ?? '')}</time>
+          {nextDayEnd(occ) && <small className="event-time-next">{nextDayEnd(occ)}</small>}
         </span>
         <span className="event-copy">
           <strong>{occ.title ?? '予定あり'}</strong>

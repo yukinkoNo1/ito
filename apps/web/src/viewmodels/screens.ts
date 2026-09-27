@@ -26,6 +26,7 @@ export const COMPOSER_HINT = '例: 土曜10時 父 ゴルフ';
 
 export type FlowScreenData = Omit<
   FlowScreenProps,
+  | 'sync'
   | 'onPickExample'
   | 'onSetFilter'
   | 'onJumpToFresh'
@@ -54,7 +55,6 @@ export function buildFlowScreen(input: {
   to: DateISO;
   selectedDate: DateISO;
   weekStart: 0 | 1;
-  sync: SyncVM;
   unreadActivity: number;
   notice: HomeNoticeVM;
   showBackToToday: boolean;
@@ -75,19 +75,20 @@ export function buildFlowScreen(input: {
     items,
     members: toMemberVMs(ctx.members, ctx.meId),
     anchorKey: `day:${input.selectedDate}`,
-    headerDateLabel: longDateLabel(ctx.today),
-    summary: buildSummary(today, ctx.members, freshCount),
+    headerDateLabel: `${parseDate(ctx.today).year}年 ${longDateLabel(ctx.today)}`,
+    // ④「新しい予定 n件」はボタン（freshCount）で出すので、まとめの文には入れない
+    summary: buildSummary(today, ctx.members, 0),
     freshCount,
     week: buildWeek(events, input.selectedDate, input.weekStart, ctx, filter, (d, o, inMonth) =>
       toMonthCell(d, o, inMonth, ctx),
     ),
     selectedDate: input.selectedDate,
-    sync: input.sync,
     filterMemberIds: filter,
     unreadActivity: input.unreadActivity,
     showBackToToday: input.showBackToToday,
     notice: input.notice,
-    emptyExamples: EMPTY_EXAMPLES,
+    // 入力例は、手元に予定が 1 件もないときだけ（絞り込みや範囲で 0 件のときは日の見出しを出す）
+    emptyExamples: events.some((e) => e.parentId === null) ? [] : EMPTY_EXAMPLES,
   };
 }
 
@@ -204,9 +205,4 @@ export function buildSettingsVM(input: {
 /** 週の帯の「前の週・次の週」 */
 export function shiftWeek(date: DateISO, delta: number): DateISO {
   return addDays(date, delta * 7);
-}
-
-export function monthOf(date: DateISO): { year: number; month: number } {
-  const { year, month } = parseDate(date);
-  return { year, month };
 }

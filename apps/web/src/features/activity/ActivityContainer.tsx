@@ -1,5 +1,5 @@
 import { type ActivityDTO, activityPageSchema } from '@ito/core';
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router';
 import { useData, useNow } from '../../app/data-context';
 import { useMemberVMs } from '../../app/hooks';
@@ -20,9 +20,14 @@ export function ActivityContainer() {
   const showToast = toast.show;
   const [items, setItems] = useState<ActivityDTO[]>([]);
   const [next, setNext] = useState<string | null>(null);
+  const [status, setStatus] = useState<'loading' | 'offline' | 'ready'>('loading');
+  // 続きを読んでいるあいだは、もう一度読まない（同じページを 2 回足さない）
+  const loading = useRef(false);
 
   const load = useCallback(
     async (before: string | null) => {
+      if (loading.current) return false;
+      loading.current = true;
       try {
         const res = await apiRequest(
           'GET',
@@ -32,14 +37,18 @@ export function ActivityContainer() {
         if (res.status !== 200 || !parsed.success) throw new Error('activity');
         setItems((prev) => [...(before ? prev : []), ...parsed.data.items]);
         setNext(parsed.data.nextBefore);
+        setStatus('ready');
         return true;
       } catch {
+        if (!before) setStatus('offline');
         showToast({
           kind: 'error',
           message: '履歴はオンラインで見られます（家のサーバーにつながりません）',
           actionLabel: null,
         });
         return false;
+      } finally {
+        loading.current = false;
       }
     },
     [showToast],
@@ -59,7 +68,9 @@ export function ActivityContainer() {
 
   return (
     <HistoryScreen
+      hasMore={next !== null}
       items={buildActivity(items, now)}
+      status={status}
       members={members}
       onBack={() => goBack(navigate, '/')}
       onLoadMore={() => {

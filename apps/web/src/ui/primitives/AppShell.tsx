@@ -1,7 +1,7 @@
 import { CalendarDays, CalendarRange, Clock3, Settings, Undo2, X } from 'lucide-react';
 import { createContext, type ReactNode, useContext, useState } from 'react';
 import { createPortal } from 'react-dom';
-import type { AppShellProps, SyncVM, TabId } from '../types';
+import type { AppShellProps, SyncVM, TabId, ToastVM } from '../types';
 import { Button } from './Controls';
 
 const NAV: { label: string; icon: typeof Clock3; tab: TabId }[] = [
@@ -17,6 +17,33 @@ const BottomSlotContext = createContext<HTMLElement | null>(null);
 export function BottomSlot({ children }: { children: ReactNode }) {
   const el = useContext(BottomSlotContext);
   return el ? createPortal(children, el) : null;
+}
+
+/** C-03 トースト（「元に戻す」など。AppShell の外の画面＝はじめて・追加ガイドでも使う） */
+export function ToastBar({
+  toast,
+  onAction,
+  onDismiss,
+}: {
+  toast: ToastVM;
+  onAction: () => void;
+  onDismiss: () => void;
+}) {
+  return (
+    <div className={`undo-bar undo-bar--${toast.kind}`} role="status">
+      <span>{toast.message}</span>
+      {toast.actionLabel ? (
+        <Button onClick={onAction}>
+          {toast.kind === 'undo' && <Undo2 aria-hidden="true" />}
+          {toast.actionLabel}
+        </Button>
+      ) : (
+        <Button aria-label="閉じる" onClick={onDismiss}>
+          <X aria-hidden="true" />
+        </Button>
+      )}
+    </div>
+  );
 }
 
 /** C-02: 未送信・オフラインは入力バーのすぐ上に 1 行 */
@@ -54,19 +81,7 @@ export default function AppShell({
   const canRetry = sync.status === 'offline' || sync.status === 'error';
   const modal = Boolean(overlay);
   const toastBar = toast && (
-    <div className={`undo-bar undo-bar--${toast.kind}`} role="status">
-      <span>{toast.message}</span>
-      {toast.actionLabel ? (
-        <Button onClick={onToastAction}>
-          {toast.kind === 'undo' && <Undo2 aria-hidden="true" />}
-          {toast.actionLabel}
-        </Button>
-      ) : (
-        <Button aria-label="閉じる" onClick={onToastDismiss}>
-          <X aria-hidden="true" />
-        </Button>
-      )}
-    </div>
+    <ToastBar onAction={onToastAction} onDismiss={onToastDismiss} toast={toast} />
   );
   return (
     <main className={`app-shell ${screen ?? ''}`}>

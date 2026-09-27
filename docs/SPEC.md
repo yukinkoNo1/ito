@@ -924,7 +924,7 @@ volumes:
 - **色の正は `ui/tokens.css`**。値は下の色と同じはず（UI 担当 AI に渡した値）。違っていたら下の値に戻す。淡い面は `color-mix(in oklab, 糸の色 10%, var(--paper))`（ダークは 20%）。Tailwind の `@theme` は tokens.css へ接続する
 - 端末のダーク設定への追従は本体側で行う（`prefers-color-scheme` を見て `html` に `data-theme` を付ける。ユーザーが選んだテーマがあればそちらを優先）
 - 文字の大きさ（標準／大きめ）は `html` の `font-size` で切り替える（100% / 115%）。UI の寸法は rem で作られている前提で、px 固定の箇所は Phase 6 で rem に直す
-- 下の型が画面の props の正。変えるときはこの節を更新する（`apps/web/src/ui/types.ts` と同じであることを web のテストで確かめる）。Phase 6 で足したもの: `AppShellProps.screen`・`AppShellProps.overlay`、`EventDetailScreenProps.children`、`FieldEditSheetProps`、`SyncVM.errorLabel`・`SyncVM.action`（§24 D29）
+- 下の型が画面の props の正。変えるときはこの節を更新する（`apps/web/src/ui/types.ts` と同じであることを web のテストで確かめる）。Phase 6 で足したもの: `AppShellProps.screen`・`AppShellProps.overlay`、`EventDetailScreenProps.children`、`FieldEditSheetProps`、`SyncVM.errorLabel`・`SyncVM.action`（§24 D29）、`ConflictSheetProps.deleted`、`ActivityScreenProps.status`・`hasMore`、`TrashScreenProps.status`、`FlowScreenProps.headerDateLabel` の年（§24 D32）
 
 **色（UI 担当 AI に渡した値）**
 ```css
@@ -1297,7 +1297,7 @@ export interface FlowScreenProps {
   items: FlowItem[];
   members: MemberVM[];
   anchorKey: string; // 初回表示で先頭に合わせる item の key（今日）
-  headerDateLabel: string; // '9月27日 日曜日'
+  headerDateLabel: string; // '2026年 9月27日 日曜日'（今日。年・日付・曜日を空白で区切る。§24 D32）
   summary: string[]; // 今日のまとめ（最大4つ）'今日 3件' '18:00 全員で夕食' '父は出張中（〜30日）'
   freshCount: number; // 家族が追加・変更した「新」の件数（0 なら出さない）
   week: MonthCellVM[]; // 上部に固定する週の帯（7日）
@@ -1402,6 +1402,7 @@ export interface ConflictSheetProps {
   mine: OccurrenceVM;
   theirs: OccurrenceVM;
   theirsByName: string; // 'お母さん'
+  deleted: 'mine' | 'theirs' | null; // どちらかが削除した競合（自分が削除した／家族が削除していた。§24 D32）
   members: MemberVM[];
   onKeepTheirs: () => void;
   onKeepMine: () => void;
@@ -1466,6 +1467,8 @@ export interface MembersAdminScreenProps {
 /** S-08 履歴 */
 export interface ActivityScreenProps {
   items: ActivityVM[];
+  status: 'loading' | 'offline' | 'ready'; // オンラインで読む画面の状態（§24 D32）
+  hasMore: boolean; // 「もっと見る」で続きを読めるか
   members: MemberVM[];
   onBack: () => void;
   onOpenEvent: (eventId: string) => void;
@@ -1475,6 +1478,7 @@ export interface ActivityScreenProps {
 /** S-09 ゴミ箱 */
 export interface TrashScreenProps {
   items: TrashItemVM[];
+  status: 'loading' | 'offline' | 'ready'; // オンラインで読む画面の状態（§24 D32）
   onBack: () => void;
   onRestore: (eventId: string) => void;
 }
@@ -1601,6 +1605,7 @@ export interface OfflineBannerProps {
 | D29 | §22 の型に足す: `AppShellProps.screen`（画面ごとの CSS の修飾）・`AppShellProps.overlay`（S-04 詳細・S-05 書く画面を重ねる。開いているあいだは下の画面と下の帯を inert にし、トーストはシートの上に出す）、`EventDetailScreenProps.children`（詳細の中に重ねる小さなシート・C-04・C-05）、`FieldEditSheetProps`（S-04 の「その項目だけ直す」）、`SyncVM.errorLabel`・`SyncVM.action`（C-02 に止まった理由を出し、426 は「再試行」の代わりに「更新」）。「今日に戻る」は画面から AppShell の下の帯へ portal で描く。糸の位置は 4 人までは書き出しのクラス、5〜8 人は均等割りの style。詳細は `/e/:id` のまま、開く前の画面の上にシートとして重ねる（直接開いたら「これから」の上）。書く画面の開け閉めは履歴に積まない。開始の時刻を動かしたら終わりの時刻も同じだけ動かす（長さを保つ）。地図のリンクは iPhone では Apple のマップ、ほかは Google マップ | 書き出しの画面の中にあった状態（下の帯・小さなシート・競合の文）を props に出すため。シートの下に隠れたナビを操作できないように（axe の target-size）。§6.2「予定の時刻を直す」で時刻だけを直したときに長さが変わらないように | 各画面が下の帯を自前で持つ（書き出しのまま）／詳細を別のページにする |
 | D30 | コントラストと 44px のための見た目の小さな変更（過去の行・月の外の日の opacity を文字の色に、糸の色の文字を text の色に、週の帯の高さを 2.75rem に、月の画面の週の始まりの切り替えを外す＝設定にある）。Biome の `noDescendingSpecificity` は書き出しの CSS（`ui/*.css`）だけ外す（並べ替えると見た目が変わる）。`role="group"` の div は fieldset にしない（既定の枠と flex の差で見た目が変わる） | §23 Phase 6 の axe の違反ゼロと、§6.1 のタップ領域 44px。「見た目は変えない」（§22）の範囲で直す | 色の値そのものを変える（§22 の色の正を変えることになる） |
 | D31 | ギャラリーは開発と E2E 用のビルドにだけ入れる（本番のビルドでは分岐ごと消える）。`/__gallery?s=<状態>&theme=dark&bare=1`（bare は枠なし）。見本（`ui/mock-data.ts`）は import のない素のデータにし、ギャラリーは本番と同じ viewmodels で §22 の型にする。E2E は同じ予定を API で入れ、時計を 2030-09-29 14:18 に止めて、ギャラリーの状態と本番の画面の `.app-shell` のスクリーンショットを比べる（ほかの E2E が作る予定と重ならないように先の年） | RUNBOOK 3. と §23 Phase 6 の「ギャラリーの状態と本番画面のスクリーンショットが一致する」を、同じデータ・固定の時計で確かめるため | 本番のビルドにも入れる／ギャラリーの見本を手で §22 の型に書く（本番の組み立てと食い違っても気づけない） |
+| D32 | Phase 6 のレビューで決めた画面の細則: 見出しの日付は今日の年・日付・曜日（`'2026年 9月27日 日曜日'`）。「新しい予定 n件」はボタンだけで出し、まとめの文には入れない。入力例は手元に予定が 1 件もないときだけ。無効にした家族だけが担当の回はこれから・月に出さない（表示用フィードと同じ）。人の札が 7 個以上なら横にスクロール。シートは、つまみ・見出しからの引き下ろしで閉じる（詳細は中身が一番上のときも。書く画面は書きかけを消さないようにつまみ・見出しだけ）。新しい版のトーストは、シートを開いているあいだは出さない。はじめて・追加ガイドにもトーストと同期が止まった理由を出す。テーマの配色の追従は 1 か所で持ち、選んだテーマに color-scheme・theme-color も合わせる。書く画面にほかの日・ほかの時刻と、「くわしく」の開始日・開始と終わりの時刻を足す（札にない日を選んだらその日の札を足す）。日付へ移動したら、その日の前後 8 週を描く。競合のシートに削除の別を、履歴・ゴミ箱に読み込み中・オフラインと続きの有無を渡す | Phase 6 のレビュー（P6-*）で見つかった崩れ・後退・誤解を招く表示を、§6.1・§19・§22 の意図に沿って直すため | 書き出しのまま（札は 6 列固定、シート全体でスワイプ、42 日だけの日付選択など） |
 
 ## 25. 将来の拡張（今回は作らない）
 iPhone のカレンダーから購読できる ICS フィード（Tailscale 接続時のみ有効。`feed_tokens` に本人用のスコープを足せば、連携キーの仕組みをそのまま使える）、いえボードに祝日・留守（複数日の busy の終日予定）を出す（フィードにはもう入っている。いえボード側の作業）、Google カレンダーからの取り込み、写真の添付、六曜、移動時間、インターネット公開時のパスキー認証。

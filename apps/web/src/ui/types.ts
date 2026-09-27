@@ -347,7 +347,7 @@ export interface FlowScreenProps {
   items: FlowItem[];
   members: MemberVM[];
   anchorKey: string; // 初回表示で先頭に合わせる item の key（今日）
-  headerDateLabel: string; // '9月27日 日曜日'
+  headerDateLabel: string; // '2026年 9月27日 日曜日'（今日。年・日付・曜日を空白で区切る。§24 D32）
   summary: string[]; // 今日のまとめ（最大4つ）'今日 3件' '18:00 全員で夕食' '父は出張中（〜30日）'
   freshCount: number; // 家族が追加・変更した「新」の件数（0 なら出さない）
   week: MonthCellVM[]; // 上部に固定する週の帯（7日）
@@ -452,6 +452,7 @@ export interface ConflictSheetProps {
   mine: OccurrenceVM;
   theirs: OccurrenceVM;
   theirsByName: string; // 'お母さん'
+  deleted: 'mine' | 'theirs' | null; // どちらかが削除した競合（自分が削除した／家族が削除していた。§24 D32）
   members: MemberVM[];
   onKeepTheirs: () => void;
   onKeepMine: () => void;
@@ -516,6 +517,8 @@ export interface MembersAdminScreenProps {
 /** S-08 履歴 */
 export interface ActivityScreenProps {
   items: ActivityVM[];
+  status: 'loading' | 'offline' | 'ready'; // オンラインで読む画面の状態（§24 D32）
+  hasMore: boolean; // 「もっと見る」で続きを読めるか
   members: MemberVM[];
   onBack: () => void;
   onOpenEvent: (eventId: string) => void;
@@ -525,6 +528,7 @@ export interface ActivityScreenProps {
 /** S-09 ゴミ箱 */
 export interface TrashScreenProps {
   items: TrashItemVM[];
+  status: 'loading' | 'offline' | 'ready'; // オンラインで読む画面の状態（§24 D32）
   onBack: () => void;
   onRestore: (eventId: string) => void;
 }

@@ -176,6 +176,15 @@ export const MOCK_EVENTS: MockEvent[] = [
     members: ['mama'],
   },
   {
+    key: 'nightfishing',
+    by: 'papa',
+    title: '夜釣り',
+    allDay: false,
+    startAt: '2030-10-03T22:00:00+09:00',
+    endAt: '2030-10-04T01:00:00+09:00',
+    members: ['papa'],
+  },
+  {
     key: 'sportsday',
     by: 'papa',
     title: '運動会',

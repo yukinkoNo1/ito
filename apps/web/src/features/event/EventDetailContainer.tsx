@@ -120,6 +120,11 @@ export function EventDetailContainer() {
       mine: toOccurrenceVM(mine, ctx),
       theirs: toOccurrenceVM(theirs, ctx),
       theirsByName: allMembers.find((m) => m.id === conflict.theirs.updatedBy)?.name ?? '家族',
+      deleted: conflict.theirsDeleted
+        ? ('theirs' as const)
+        : conflict.kind === 'delete' || !conflict.mine
+          ? ('mine' as const)
+          : null,
     };
   })();
 
@@ -170,6 +175,7 @@ export function EventDetailContainer() {
           onKeepMine={() => void resolve('mine')}
           onKeepTheirs={() => void resolve('theirs')}
           open={conflictOpen}
+          deleted={conflictVMs.deleted}
           theirs={conflictVMs.theirs}
           theirsByName={conflictVMs.theirsByName}
         />

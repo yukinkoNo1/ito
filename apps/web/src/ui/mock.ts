@@ -77,6 +77,48 @@ export const mockMembers: MemberDTO[] = MOCK_MEMBERS.map((m, i) => ({
 
 export const mockMemberVMs: MemberVM[] = toMemberVMs(mockMembers, MOCK_ME_ID);
 
+/** 8 人家族の見本（残りの 4 色と、5〜8 人の糸・札の並び。ギャラリーの flow-8 だけで使う） */
+const EXTRA = [
+  ['ばあば', 'ば', 'wakakusa'],
+  ['じいじ', 'じ', 'fuji'],
+  ['おば', 'お', 'ruri'],
+  ['めい', 'め', 'kaki'],
+] as const;
+
+export const mockMembers8: MemberDTO[] = [
+  ...mockMembers,
+  ...EXTRA.map(([name, mark, color], i) => ({
+    id: `0192f5a0-1c00-7000-8000-00000000a0${i + 5}0`,
+    name,
+    mark,
+    color,
+    role: 'member' as const,
+    disabled: false,
+    createdAt: `2030-09-01T00:00:1${i}.000+09:00`,
+  })),
+];
+
+/** 8 人家族の見本の予定（足した 4 人にも今日と明日の予定を 1 件ずつ） */
+export function mockEvents8(): LocalEvent[] {
+  const extra = mockMembers8.slice(mockMembers.length).map((m, i) => {
+    const body = eventCreateSchema.parse({
+      title: `${m.name}の予定`,
+      allDay: false,
+      startAt: `2030-09-${29 + (i % 2)}T${String(9 + i).padStart(2, '0')}:00:00+09:00`,
+      memberIds: [m.id],
+    });
+    const made = createLocally(
+      body,
+      `0192f5b0-0000-7000-8000-0000000008${i}0`,
+      m.id,
+      MOCK_NOW - 86_400_000,
+    );
+    if (!('value' in made)) throw new Error('見本の予定が作れません');
+    return { ...made.value, version: 1, sync: 'synced' as const };
+  });
+  return [...mockEvents(), ...extra];
+}
+
 export const mockMe: MeDTO = {
   id: MOCK_ME_ID,
   name: 'お父さん',

@@ -3,6 +3,21 @@
  * 書き出しの styles.css の書き方（rem・トークン）に合わせ、既存の見た目は変えない。
  */
 
+/* テーマに合わせて、ブラウザの部品（日付・時刻の入力、スクロールバー）の配色も切り替える */
+html[data-theme="light"] {
+  color-scheme: light;
+}
+
+html[data-theme="dark"] {
+  color-scheme: dark;
+}
+
+/* 画面幅は 360〜430px が主。それより広い画面では中央に寄せて最大 480px（§19） */
+#root > .app-shell {
+  max-width: 30rem;
+  margin-inline: auto;
+}
+
 /* S-01: 月の区切り見出し（FlowItem month） */
 .month-divider {
   position: relative;
@@ -79,9 +94,57 @@
   height: 0;
 }
 
+/* C-03: 下の帯のない画面（はじめて・追加ガイド）のトースト */
+.toast-layer--bare {
+  position: fixed;
+}
+
 /* C-01: 下の帯の上に画面から描く行（「今日に戻る」） */
 .bottom-slot:empty {
   display: none;
+}
+
+/* S-01: 日付をまたぐ予定の終わり（時刻の列の 2 行目） */
+.event-time-next {
+  color: var(--ink-3);
+  font-size: 0.8125rem;
+  white-space: nowrap;
+}
+
+/* 下から出る小さなシート（日付・時刻・年月・設定）は、低い画面や「大きめ」でも見出し（閉じる）が見えるように */
+.composer-picker,
+.date-picker,
+.month-picker,
+.setting-picker {
+  max-height: calc(100% - 2rem);
+  overflow-y: auto;
+}
+
+.composer-picker .sheet-title,
+.date-picker .sheet-title,
+.month-picker .sheet-title,
+.setting-picker .sheet-title {
+  position: sticky;
+  z-index: 1;
+  top: 0;
+  background: var(--paper);
+}
+
+/* S-05: ほかの日・ほかの時刻（札にない日時） */
+.composer-picker-other {
+  display: grid;
+  margin-bottom: 0.5rem;
+  gap: 0.25rem;
+}
+
+.composer-picker-other > span {
+  color: var(--ink-3);
+  font-size: 0.8125rem;
+  font-weight: 700;
+}
+
+.composer-picker-other > .ui-input {
+  width: 100%;
 }
 
 /* C-02: つながらないときの 1 行（「再試行」「更新」付き） */

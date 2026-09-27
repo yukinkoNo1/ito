@@ -3,7 +3,7 @@ import { Button } from '../primitives/Controls';
 import type { TrashScreenProps } from '../types';
 
 /** S-09 ゴミ箱（30 日保管。復元） */
-export default function TrashScreen({ items, onBack, onRestore }: TrashScreenProps) {
+export default function TrashScreen({ items, status, onBack, onRestore }: TrashScreenProps) {
   return (
     <>
       <header className="secondary-header">
@@ -17,7 +17,14 @@ export default function TrashScreen({ items, onBack, onRestore }: TrashScreenPro
         <span />
       </header>
       <section className="secondary-scroll">
-        {items.length ? (
+        {status !== 'ready' && items.length === 0 ? (
+          <div className="secondary-empty" role="status">
+            <strong>
+              {status === 'loading' ? '読み込み中…' : 'ゴミ箱はオンラインで見られます'}
+            </strong>
+            {status === 'offline' && <p>家のサーバーにつながりません（Tailscale を確認）</p>}
+          </div>
+        ) : items.length ? (
           <div className="trash-list">
             {items.map((row) => (
               <div className="trash-row" key={row.eventId}>

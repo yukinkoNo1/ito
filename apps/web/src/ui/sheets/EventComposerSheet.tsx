@@ -116,6 +116,9 @@ export default function EventComposerSheet({
   const canSave = Boolean(draft?.title.trim() && draft.startDate) && !vm.saving;
   const today = vm.quickDates[0]?.date;
   const pickerDates = today ? Array.from({ length: 42 }, (_, i) => addDays(today, i)) : [];
+  // 入力できる日付の範囲（今日から −1 年〜+3 年。§16 の検証と同じ）
+  const earliest = today ? addDays(today, -366) : undefined;
+  const latest = today ? addDays(today, 366 * 3) : undefined;
   const pickerTimes = Array.from({ length: 33 }, (_, i) => timeFromMinutes(6 * 60 + i * 30));
   const endOffsets = [60, 120];
   const endFor = (minutes: number) =>
@@ -144,7 +147,11 @@ export default function EventComposerSheet({
           dragStart.current = undefined;
         }}
         onTouchStart={(event) => {
-          dragStart.current = event.touches[0]?.clientY;
+          // 書きかけを消さないよう、つまみと見出しからの引き下ろしだけで閉じる（中身のスクロールでは閉じない）
+          const target = event.target as Element;
+          dragStart.current = target.closest('.sheet-grabber, .full-sheet-header')
+            ? event.touches[0]?.clientY
+            : undefined;
         }}
         role="dialog"
       >
@@ -328,6 +335,41 @@ export default function EventComposerSheet({
 
           {vm.mode === 'detail' && draft && (
             <div className="composer-details">
+              <label>
+                <span>開始日</span>
+                <Input
+                  max={latest}
+                  min={earliest}
+                  onChange={(e) => e.target.value && patch({ startDate: e.target.value })}
+                  type="date"
+                  value={draft.startDate}
+                />
+              </label>
+              {!draft.allDay && (
+                <>
+                  <label>
+                    <span>開始の時刻</span>
+                    <Input
+                      onChange={(e) =>
+                        e.target.value && patch({ allDay: false, startTime: e.target.value })
+                      }
+                      type="time"
+                      value={draft.startTime ?? ''}
+                    />
+                  </label>
+                  <label>
+                    <span>終わりの時刻（開始より前なら翌日）</span>
+                    <Input
+                      onChange={(e) => patch({ endTime: e.target.value || null })}
+                      type="time"
+                      value={draft.endTime ?? ''}
+                    />
+                  </label>
+                  {draft.endTime && (
+                    <Button onClick={() => patch({ endTime: null })}>終わりの時刻なし</Button>
+                  )}
+                </>
+              )}
               {!draft.allDay ? null : (
                 <label>
                   <span>最終日</span>
@@ -452,6 +494,34 @@ export default function EventComposerSheet({
                 <strong>{picker === 'date' ? '日付を選ぶ' : '時刻を選ぶ'}</strong>
                 <Button onClick={() => setPicker(null)}>閉じる</Button>
               </div>
+              {picker === 'date' ? (
+                <label className="composer-picker-other">
+                  <span>ほかの日</span>
+                  <Input
+                    max={latest}
+                    min={earliest}
+                    onChange={(e) => {
+                      if (!e.target.value) return;
+                      patch({ startDate: e.target.value });
+                      setPicker(null);
+                    }}
+                    type="date"
+                    value={draft?.startDate ?? ''}
+                  />
+                </label>
+              ) : (
+                <label className="composer-picker-other">
+                  <span>ほかの時刻</span>
+                  <Input
+                    onChange={(e) => {
+                      if (!e.target.value) return;
+                      patch({ allDay: false, startTime: e.target.value });
+                    }}
+                    type="time"
+                    value={draft?.startTime ?? ''}
+                  />
+                </label>
+              )}
               <div className="composer-picker-grid">
                 {picker === 'date'
                   ? pickerDates.map((date) => {

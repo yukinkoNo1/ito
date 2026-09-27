@@ -46,7 +46,9 @@ export function ShellLayout() {
   }, [outdated]);
 
   const current = tabOf(location.pathname);
-  // 新しい SW が待っていれば「更新」を出す（ほかのトーストがあればそちらが先。§17）
+  const sheetOpen = Boolean(nav.detail || nav.composer);
+  // 新しい SW が待っていれば「更新」を出す（ほかのトーストがあればそちらが先。§17）。
+  // シートを開いているあいだは出さない（消えないトーストがシートの操作を覆わないように）
   const toastVm: ToastVM | null = toast.current
     ? {
         id: String(toast.current.id),
@@ -54,7 +56,7 @@ export function ShellLayout() {
         message: toast.current.message,
         actionLabel: toast.current.actionLabel,
       }
-    : applyUpdate
+    : applyUpdate && !sheetOpen
       ? { id: 'update', kind: 'info', message: '新しいバージョンがあります', actionLabel: '更新' }
       : null;
 
@@ -78,7 +80,7 @@ export function ShellLayout() {
       }}
       onToastDismiss={toast.dismiss}
       overlay={
-        nav.detail || nav.composer ? (
+        sheetOpen ? (
           <>
             {/* 書く画面は詳細の上に重ねる（詳細の「編集」「複製」から開く）ので、あとに置く */}
             <EventDetailContainer />
