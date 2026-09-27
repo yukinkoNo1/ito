@@ -5,9 +5,11 @@ import { expect, test } from './fixtures';
 import { api, ensureFamily, ORIGIN } from './helpers';
 
 const SW_PATH = fileURLToPath(new URL('../apps/web/dist-e2e/sw.js', import.meta.url));
-const OFFLINE = /net::ERR_INTERNET_DISCONNECTED/;
-const ABORTED = /net::ERR_FAILED/;
-const CONFLICT = /status of 409/;
+// 許すのは、テストで意図して失敗させた /api/ への要求だけ（アプリシェル・アイコン・manifest などの失敗は許さない）
+const API_URL = String.raw`\(http://localhost:8788/api/`;
+const OFFLINE = new RegExp(`net::ERR_INTERNET_DISCONNECTED ${API_URL}`);
+const ABORTED = new RegExp(`net::ERR_FAILED ${API_URL}`);
+const CONFLICT = new RegExp(`status of 409 .*${API_URL}events/`);
 
 let seq = 0;
 async function createAs(
@@ -134,28 +136,78 @@ test.describe('オフライン', () => {
 test.describe('API だけ遮断', () => {
   test.use({ allowedConsoleErrors: { patterns: [ABORTED] } });
 
-  test('Tailscale だけ切れた状態でも、送信待ちが溜まり、解除で送られる', async ({
+  test('Tailscale だけ切れた状態でも、読み込み直して見られ、送信待ちが溜まり、つながれば（再試行を押さなくても）送られる', async ({
     page,
     context,
     request,
   }) => {
     const day = tomorrowIso();
+    await createAs(request, 'mama', { title: 'E2E 遮断前からある', allDay: true, startDate: day });
+    // 60 秒ごとの同期を進めるために時計を入れる（時間はふつうに流れる）
+    await page.clock.install();
     await page.goto('/');
-    await expect(page.getByRole('heading', { name: 'これから' })).toBeVisible();
+    await expect(page.getByText('E2E 遮断前からある')).toBeVisible();
     await context.route('**/api/**', (route) => route.abort());
 
-    await composeOn(page, 'E2E 遮断中に書く', day);
+    // API だけ届かない状態で読み込み直しても、手元の予定が見える
+    await page.reload();
+    await expect(page.getByText('E2E 遮断前からある')).toBeVisible();
     await expect(page.getByText('家のサーバーにつながりません（Tailscale を確認）')).toBeVisible();
-    await expect(page.getByRole('button', { name: /E2E 遮断中に書く/ })).toContainText('未送信');
+
+    await composeOn(page, 'E2E 遮断中に書く', day);
+    const row = page.getByRole('button', { name: /E2E 遮断中に書く/ });
+    await expect(row).toContainText('未送信');
 
     await context.unroute('**/api/**');
-    await page.getByRole('button', { name: '再試行' }).click();
-    await expect(page.getByRole('button', { name: /E2E 遮断中に書く/ })).not.toContainText(
-      '未送信',
-    );
+    // 再試行は押さない。表示中の 60 秒ごとの同期で送られる
+    await page.clock.runFor(61_000);
+    await expect(row).not.toContainText('未送信', { timeout: 15_000 });
     await expect(page.getByText('家のサーバーにつながりません')).toBeHidden();
     expect(await serverTitles(request)).toContain('E2E 遮断中に書く');
   });
+});
+
+/** 背面に回す・前面に戻す（iPhone のホーム画面アプリでいちばん多い開き直し） */
+async function setVisibility(page: Page, state: 'hidden' | 'visible'): Promise<void> {
+  await page.evaluate((s) => {
+    Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => s });
+    Object.defineProperty(document, 'hidden', { configurable: true, get: () => s === 'hidden' });
+    document.dispatchEvent(new Event('visibilitychange'));
+  }, state);
+}
+
+test('背面に回して前面に戻したときも、そのあいだに増えた予定に「新」が付く', async ({
+  page,
+  request,
+}) => {
+  const day = tomorrowIso();
+  await page.goto('/');
+  await expect(page.getByRole('heading', { name: 'これから' })).toBeVisible();
+  await setVisibility(page, 'hidden');
+  await createAs(request, 'mama', {
+    title: 'E2E 背面のあいだに増えた',
+    allDay: true,
+    startDate: day,
+  });
+  await setVisibility(page, 'visible');
+  await expect(
+    page.locator('li[data-fresh="true"]', { hasText: 'E2E 背面のあいだに増えた' }),
+  ).toBeVisible();
+});
+
+test('ホーム画面から開いている（インストール済み）ときは、ホーム画面への追加の案内を出さない', async ({
+  page,
+  context,
+}) => {
+  await context.addInitScript(() => {
+    Object.defineProperty(Navigator.prototype, 'standalone', {
+      configurable: true,
+      get: () => true,
+    });
+  });
+  await page.goto('/');
+  await expect(page.getByRole('heading', { name: 'これから' })).toBeVisible();
+  await expect(page.getByRole('note')).toHaveCount(0);
 });
 
 test('別のメンバーが追加した予定に「新」が付き、次に開いたときには消える', async ({
@@ -213,7 +265,28 @@ test.describe('競合', () => {
       const row = page.getByRole('button', { name: new RegExp(`${title} 自分`) });
       await expect(row).toContainText('競合', { timeout: 15_000 });
       await row.click();
+      const resolver = page.getByRole('region', { name: '競合の解決' });
+      await expect(resolver).toBeVisible();
+      // 解決するまでは編集・削除できない（自分の変更が黙って消えないように。SYNC-01）
+      await expect(page.getByRole('button', { name: '編集' })).toHaveCount(0);
+      await expect(page.getByRole('button', { name: '削除' })).toHaveCount(0);
       await page.getByRole('button', { name: choice }).click();
+      await expect(resolver).toHaveCount(0);
+      await page.goto('/');
+      const mine = page.getByRole('button', { name: new RegExp(`${title} 自分`) });
+      const theirs = page.getByRole('button', { name: new RegExp(`${title} 家族`) });
+      if (choice === '家族の変更を採用') {
+        await expect(theirs).toBeVisible();
+        await expect(mine).toHaveCount(0);
+      } else if (choice === '自分の変更で上書き') {
+        await expect(mine).not.toContainText('未送信', { timeout: 15_000 });
+        await expect(theirs).toHaveCount(0);
+      } else {
+        await expect(theirs).toBeVisible();
+        await expect(mine).not.toContainText('未送信', { timeout: 15_000 });
+      }
+      // 行の印（未送信・競合）が残っていない（件名にも「競合」が入るので、印の要素だけを見る）
+      await expect(page.getByText(/^(競合|未送信)$/)).toHaveCount(0);
       const expected =
         choice === '家族の変更を採用'
           ? [`${title} 家族`]
@@ -227,9 +300,30 @@ test.describe('競合', () => {
   }
 });
 
-test('/api/* は Cache Storage に入らない。/api/export へのページ遷移は index.html にならない', async ({
-  page,
-}) => {
+test.describe('SW を通らない遷移', () => {
+  // /api/export は家族のアプリからの要求ではない（X-Ito-Client がない）ので 4xx になる。その 1 件だけ許す
+  test.use({
+    allowedConsoleErrors: {
+      patterns: [/status of 4\d\d .*\(http:\/\/localhost:8788\/api\/export/],
+    },
+  });
+
+  test('/api/export・/healthz へのページ遷移は、SW の管理下でも index.html にならない', async ({
+    page,
+  }) => {
+    await page.goto('/');
+    await underServiceWorker(page);
+    for (const path of ['/api/export?format=json', '/healthz']) {
+      const res = await page.goto(path);
+      expect(res, path).not.toBeNull();
+      expect(res?.fromServiceWorker(), path).toBe(false);
+      expect(res?.headers()['content-type'] ?? '', path).not.toContain('text/html');
+      await expect(page.locator('#root'), path).toHaveCount(0);
+    }
+  });
+});
+
+test('/api/* は Cache Storage に入らない', async ({ page }) => {
   await page.goto('/');
   await underServiceWorker(page);
   await page.getByRole('link', { name: '月' }).click();
@@ -244,10 +338,6 @@ test('/api/* は Cache Storage に入らない。/api/export へのページ遷�
   });
   expect(cached.length).toBeGreaterThan(0);
   expect(cached.filter((u) => u.startsWith('/api/'))).toEqual([]);
-  const res = await page.request.get('/api/export?format=json', {
-    headers: { Accept: 'text/html' },
-  });
-  expect(res.headers()['content-type'] ?? '').not.toContain('text/html');
 });
 
 test('「更新」を押すと新しい SW に切り替わる', async ({ page }) => {
@@ -302,50 +392,76 @@ test('インストールできる（CDP の Page.getInstallabilityErrors が空�
   expect(manifest.errors).toEqual([]);
 });
 
-test('はじめて（色 → 使い方）→ ホームの案内（ホーム画面への追加）は閉じたら出ない', async ({
-  browser,
-}) => {
-  const context = await browser.newContext({ baseURL: ORIGIN });
-  await context.addInitScript(() => {
-    try {
-      localStorage.setItem('ito.devLogin', 'haruto@example.com');
-    } catch {}
-  });
-  const page = await context.newPage();
-  await page.goto('/');
-  await expect(page).toHaveURL(/\/welcome$/);
-  await expect(page.getByRole('heading', { name: /ようこそ/ })).toBeVisible();
-  await page.getByRole('button', { name: '次へ' }).click();
-  await page.getByRole('button', { name: 'はじめる' }).click();
-  await expect(page.getByRole('heading', { name: 'これから' })).toBeVisible();
-  const notice = page.getByRole('note');
-  await expect(notice).toContainText('ホーム画面に追加');
-  await notice.getByRole('button', { name: '案内を閉じる' }).click();
-  await page.reload();
-  await expect(page.getByRole('heading', { name: 'これから' })).toBeVisible();
-  await expect(page.getByRole('note')).toHaveCount(0);
-  await page.goto('/install');
-  await expect(page.getByRole('heading', { name: 'ホーム画面に追加' })).toBeVisible();
-  await context.close();
-});
+test.describe('はじめての端末', () => {
+  test.use({ onboarded: false });
 
-test('この端末からログアウト（端末の保存を消して、はじめてへ）', async ({ browser }) => {
-  const context = await browser.newContext({ baseURL: ORIGIN });
-  const page = await context.newPage();
-  // 初期化スクリプトは使わない（ログアウトのあとに書き戻さないように）
-  await page.goto('/install');
-  await page.evaluate(() => {
-    localStorage.setItem('ito.devLogin', 'mama@example.com');
-    localStorage.setItem('ito.onboarded', '1');
+  test('はじめて（色 → 使い方）→ ホームの案内（ホーム画面への追加）は閉じたら出ない', async ({
+    page,
+    context,
+    request,
+  }) => {
+    await context.addInitScript(() => {
+      try {
+        localStorage.setItem('ito.devLogin', 'haruto@example.com');
+      } catch {}
+    });
+    await page.goto('/');
+    await expect(page).toHaveURL(/\/welcome$/);
+    await expect(page.getByRole('heading', { name: /ようこそ/ })).toBeVisible();
+    // ほかの家族の色は選べない。空いている色を選ぶとサーバーに保存される
+    await expect(page.getByRole('radio', { name: /^wakatake/ })).toBeDisabled();
+    const fuji = page.getByRole('radio', { name: /^fuji/ });
+    await fuji.click();
+    await expect(fuji).toBeChecked();
+    await expect
+      .poll(
+        async () =>
+          ((await (await api(request, 'haru', 'GET', '/api/me')).json()) as { color: string })
+            .color,
+      )
+      .toBe('fuji');
+    await page.getByRole('button', { name: '次へ' }).click();
+    await page.getByRole('button', { name: 'はじめる' }).click();
+    await expect(page.getByRole('heading', { name: 'これから' })).toBeVisible();
+    const notice = page.getByRole('note');
+    await expect(notice).toContainText('ホーム画面に追加');
+    await notice.getByRole('button', { name: '案内を閉じる' }).click();
+    await page.reload();
+    await expect(page.getByRole('heading', { name: 'これから' })).toBeVisible();
+    await expect(page.getByRole('note')).toHaveCount(0);
+    await page.goto('/install');
+    await expect(page.getByRole('heading', { name: 'ホーム画面に追加' })).toBeVisible();
   });
-  await page.goto('/settings');
-  await expect(page.getByRole('heading', { name: '設定' })).toBeVisible();
-  await page.getByRole('button', { name: 'この端末からログアウト' }).click();
-  await expect(page).toHaveURL(/\/welcome$/);
-  const left = await page.evaluate(() => ({
-    onboarded: localStorage.getItem('ito.onboarded'),
-    devLogin: localStorage.getItem('ito.devLogin'),
-  }));
-  expect(left).toEqual({ onboarded: null, devLogin: null });
-  await context.close();
+
+  test.describe('ログアウト', () => {
+    test.use({ allowedConsoleErrors: { patterns: [OFFLINE] } });
+
+    test('この端末からログアウト（端末の保存を消して、はじめてへ。そのあともオフラインで開ける）', async ({
+      page,
+      context,
+    }) => {
+      // 初期化スクリプトは使わない（ログアウトのあとに書き戻さないように）
+      await page.goto('/install');
+      await page.evaluate(() => {
+        localStorage.setItem('ito.devLogin', 'mama@example.com');
+        localStorage.setItem('ito.onboarded', '1');
+      });
+      await page.goto('/settings');
+      await underServiceWorker(page);
+      await expect(page.getByRole('heading', { name: '設定' })).toBeVisible();
+      await page.getByRole('button', { name: 'この端末からログアウト' }).click();
+      await expect(page).toHaveURL(/\/welcome$/);
+      const left = await page.evaluate(() => ({
+        onboarded: localStorage.getItem('ito.onboarded'),
+        devLogin: localStorage.getItem('ito.devLogin'),
+      }));
+      expect(left).toEqual({ onboarded: null, devLogin: null });
+      // SW は入り直してプリキャッシュを作り直す（古い登録が残って空のキャッシュを見ない）
+      await underServiceWorker(page);
+      await context.setOffline(true);
+      await page.reload();
+      await expect(page.getByRole('heading', { name: /ようこそ/ })).toBeVisible();
+      await context.setOffline(false);
+    });
+  });
 });

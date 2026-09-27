@@ -1,6 +1,7 @@
 import 'fake-indexeddb/auto';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ItoDb } from '../src/data/db';
+import { persistIfInstalled } from '../src/pwa/install';
 import { logoutThisDevice } from '../src/pwa/logout';
 
 describe('この端末からログアウト（§17）', () => {
@@ -40,5 +41,46 @@ describe('この端末からログアウト（§17）', () => {
     expect([...store.keys()]).toEqual(['other']);
     const names = await indexedDB.databases();
     expect(names.map((d) => d.name)).not.toContain('logout-test');
+  });
+
+  it('SW の登録も外す（プリキャッシュを消したまま古い SW が残らないように）', async () => {
+    vi.stubGlobal('localStorage', {
+      length: 0,
+      key: () => null,
+      getItem: () => null,
+      setItem: () => {},
+      removeItem: () => {},
+    });
+    vi.stubGlobal('caches', { keys: async () => [], delete: async () => true });
+    const unregister = vi.fn(async () => true);
+    vi.stubGlobal('navigator', {
+      serviceWorker: { getRegistrations: async () => [{ unregister }, { unregister }] },
+    });
+    const db = new ItoDb('logout-sw-test');
+    await logoutThisDevice(db, async () => {});
+    expect(unregister).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe('永続化の要求（§17）', () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  function stubDevice(standalone: boolean) {
+    const persist = vi.fn(async () => true);
+    vi.stubGlobal('window', { matchMedia: () => ({ matches: standalone }) });
+    vi.stubGlobal('navigator', { storage: { persisted: async () => false, persist } });
+    return persist;
+  }
+
+  it('ホーム画面から開いたら（iOS で appinstalled が出なくても）永続化を求める', async () => {
+    const persist = stubDevice(true);
+    await persistIfInstalled();
+    expect(persist).toHaveBeenCalledTimes(1);
+  });
+
+  it('ブラウザで開いているときは求めない', async () => {
+    const persist = stubDevice(false);
+    await persistIfInstalled();
+    expect(persist).not.toHaveBeenCalled();
   });
 });

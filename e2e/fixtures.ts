@@ -18,7 +18,10 @@ export async function watchProblems(page: Page): Promise<PageProblems> {
     });
   });
   page.on('console', (msg) => {
-    if (msg.type() === 'error') problems.consoleErrors.push(msg.text());
+    if (msg.type() !== 'error') return;
+    // 「Failed to load resource」は本文に URL が入らないので、どの要求かを添える
+    const url = msg.location().url;
+    problems.consoleErrors.push(url ? `${msg.text()} (${url})` : msg.text());
   });
   page.on('pageerror', (err) => problems.consoleErrors.push(String(err)));
   return problems;
@@ -31,18 +34,25 @@ export async function watchProblems(page: Page): Promise<PageProblems> {
  */
 export const test = base.extend<{
   problems: PageProblems;
-  onboarded: undefined;
+  onboarded: boolean;
+  onboardedSetup: undefined;
   allowedConsoleErrors: { patterns: RegExp[] };
 }>({
   allowedConsoleErrors: [{ patterns: [] }, { option: true }],
-  /** 既定の page は「はじめて」を済ませた端末にする（はじめての画面を試すテストは別のコンテキストを作る） */
-  onboarded: [
-    async ({ context }, use) => {
-      await context.addInitScript(() => {
-        try {
-          localStorage.setItem('ito.onboarded', '1');
-        } catch {}
-      });
+  /**
+   * 既定の page は「はじめて」を済ませた端末にする。はじめての画面・ログアウトを試すテストは
+   * test.use({ onboarded: false }) にする（同じ page のまま、監視と端末の設定が効く）
+   */
+  onboarded: [true, { option: true }],
+  onboardedSetup: [
+    async ({ context, onboarded }, use) => {
+      if (onboarded) {
+        await context.addInitScript(() => {
+          try {
+            localStorage.setItem('ito.onboarded', '1');
+          } catch {}
+        });
+      }
       await use(undefined);
     },
     { auto: true },

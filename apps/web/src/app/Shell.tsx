@@ -1,6 +1,7 @@
 import { useLiveQuery } from 'dexie-react-hooks';
-import type { ReactNode } from 'react';
+import { type ReactNode, useEffect } from 'react';
 import { Link, useLocation, useSearchParams } from 'react-router';
+import { checkForUpdate } from '../pwa/register';
 import { useData, useSyncState } from './data-context';
 import { useToast } from './toast';
 import { useUpdate } from './update';
@@ -14,6 +15,12 @@ export function Shell({ children }: { children: ReactNode }) {
   const pending = useLiveQuery(() => db.outbox.count(), [db]) ?? 0;
   const [params, setParams] = useSearchParams();
   const location = useLocation();
+  const outdated = sync.block?.kind === 'client_outdated';
+
+  // 426 client_outdated: 新しい SW を確かめる（待機中の SW ができれば「更新」が出る。§12）
+  useEffect(() => {
+    if (outdated) void checkForUpdate();
+  }, [outdated]);
 
   const syncLine =
     sync.block?.kind === 'not_member'
@@ -33,13 +40,25 @@ export function Shell({ children }: { children: ReactNode }) {
         {syncLine && (
           <p role="status" className="flex items-center justify-between gap-2 text-sm">
             <span>{syncLine}</span>
-            <button
-              type="button"
-              className="min-h-11 px-3"
-              onClick={() => void store.syncNow({ retryNow: true })}
-            >
-              再試行
-            </button>
+            {outdated ? (
+              !applyUpdate && (
+                <button
+                  type="button"
+                  className="min-h-11 px-3 font-bold"
+                  onClick={() => window.location.reload()}
+                >
+                  更新
+                </button>
+              )
+            ) : (
+              <button
+                type="button"
+                className="min-h-11 px-3"
+                onClick={() => void store.syncNow({ retryNow: true })}
+              >
+                再試行
+              </button>
+            )}
           </p>
         )}
         {pending > 0 && !syncLine && (

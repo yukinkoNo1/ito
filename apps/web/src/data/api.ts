@@ -49,8 +49,11 @@ export async function apiRequest(
   };
   const stateChanging = method !== 'GET' && method !== 'HEAD';
   if (stateChanging) headers['Content-Type'] = 'application/json';
-  const dev = devLogin();
-  if (dev) headers['X-Dev-Login'] = dev;
+  // 本番のビルドでは分岐ごと消える（X-Dev-Login の文字列も残らない）
+  if (import.meta.env.DEV || __ITO_E2E__) {
+    const dev = devLogin();
+    if (dev) headers['X-Dev-Login'] = dev;
+  }
   Object.assign(headers, opts.headers ?? {});
   const fetcher = opts.fetcher ?? ((i, init) => fetch(i, init));
   let res: Response;

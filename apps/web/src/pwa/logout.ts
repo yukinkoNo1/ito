@@ -21,5 +21,10 @@ export async function logoutThisDevice(
       for (const key of await caches.keys()) await caches.delete(key);
     }
   } catch {}
+  // プリキャッシュを消したので SW の登録も外す（残すと、次の版が来るまでオフラインで開けない）
+  try {
+    const registrations = (await globalThis.navigator?.serviceWorker?.getRegistrations?.()) ?? [];
+    for (const r of registrations) await r.unregister();
+  } catch {}
   clearDevice();
 }

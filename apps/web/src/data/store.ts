@@ -38,12 +38,16 @@ export interface Toast {
   message: string;
 }
 
+const MAX_BACKOFF_MS = 60 * 60 * 1000;
+
 /** 送信の再送の間隔（指数バックオフ。最大 1 時間。§12） */
 export function backoffMs(attempts: number): number {
-  return Math.min(1000 * 2 ** Math.min(attempts, 20), 60 * 60 * 1000);
+  return Math.min(1000 * 2 ** Math.min(attempts, 20), MAX_BACKOFF_MS);
 }
 
 export type Result<T> = { ok: true; value: T } | { ok: false; errors: FieldError[] };
+
+export const CONFLICT_FIRST = '家族の変更とぶつかっています。先に「確認する」から解決してください';
 
 /** push の結果: 送り切った / 通信エラー / 待ち（バックオフ・429・5xx）/ 止めた（401・403・426） */
 type PushOutcome = 'ok' | 'network' | 'waiting' | 'blocked';
@@ -161,9 +165,10 @@ export class DataStore {
   }
 
   private async resetBackoff(which: 'all' | 'network'): Promise<number> {
+    // 429 の Retry-After の待ちは、再試行でも解かない（§12「429 は Retry-After に従う」）
     const collection =
       which === 'all'
-        ? this.db.outbox.toCollection()
+        ? this.db.outbox.filter((o) => o.failure !== 'rate')
         : this.db.outbox.filter((o) => o.failure === 'network');
     return collection.modify({ nextAttemptAt: 0 });
   }
@@ -282,7 +287,9 @@ export class DataStore {
     for (;;) {
       const item = await this.db.outbox.orderBy('createdAt').first();
       if (!item) return 'ok';
-      if (item.nextAttemptAt > this.clock.now()) return 'waiting';
+      // 待ちの途中なら止める。ただし端末の時計が戻って待ちが上限（1 時間）を超えていたら送る
+      const wait = item.nextAttemptAt - this.clock.now();
+      if (wait > 0 && wait <= MAX_BACKOFF_MS) return 'waiting';
       this.inflightId = item.id;
       try {
         let res: Awaited<ReturnType<typeof apiRequest>>;
@@ -407,9 +414,11 @@ export class DataStore {
       return 'waiting';
     }
     // 422・403 forbidden など、その予定だけの拒否: snapshot で手元を元に戻して知らせる
-    await db.transaction('rw', [db.events, db.outbox], async () => {
+    await db.transaction('rw', [db.events, db.outbox, db.meta], async () => {
       const all = await db.outbox.where('eventId').equals(item.eventId).toArray();
       await db.outbox.bulkDelete(all.map((o) => o.id));
+      // 送信待ちのあいだの取得でサーバーの版を捨てているので、次の取得を全件にして取り直す
+      await db.setMeta('cursor', 0);
       if (item.snapshot) {
         await db.events.put({
           ...item.snapshot,
@@ -448,11 +457,17 @@ export class DataStore {
     return o.attempts === 0 && o.id !== this.inflightId;
   }
 
-  private newItem(
+  /**
+   * 送信待ちを作る（送信待ちのトランザクションの中で呼ぶ）。送る順番（createdAt）は、端末の時計が
+   * 戻っても前の送信待ちより後ろにする（削除のあとの作成が先に送られないように）
+   */
+  private async newItem(
     fields: Omit<OutboxItem, 'id' | 'createdAt' | 'attempts' | 'nextAttemptAt'>,
-  ): OutboxItem {
+  ): Promise<OutboxItem> {
     const now = this.clock.now();
-    return { ...fields, id: uuidv7(now), createdAt: now, attempts: 0, nextAttemptAt: 0 };
+    const last = await this.db.outbox.orderBy('createdAt').last();
+    const createdAt = Math.max(now, (last?.createdAt ?? 0) + 1);
+    return { ...fields, id: uuidv7(now), createdAt, attempts: 0, nextAttemptAt: 0 };
   }
 
   async createEvent(input: EventCreateInput): Promise<Result<LocalEvent>> {
@@ -472,7 +487,7 @@ export class DataStore {
     await this.db.transaction('rw', [this.db.events, this.db.outbox], async () => {
       await this.db.events.put(event);
       await this.db.outbox.add(
-        this.newItem({
+        await this.newItem({
           eventId: id,
           kind: 'create',
           method: 'POST',
@@ -511,7 +526,7 @@ export class DataStore {
     } as Result<LocalEvent>;
     let before = null as LocalEvent | null;
     let changed = false;
-    await db.transaction('rw', [db.events, db.outbox], async () => {
+    await db.transaction('rw', [db.events, db.outbox, db.conflicts, db.meta], async () => {
       const current = await db.events.get(eventId);
       if (!current) return;
       if (!canSeeContent(current, meId)) {
@@ -519,6 +534,11 @@ export class DataStore {
           ok: false,
           errors: [{ field: 'id', message: 'ほかの家族の内緒の予定は変えられません' }],
         };
+        return;
+      }
+      // 競合中の予定は、C-05 で解決するまで変えない（自分の変更が黙って消えないように）
+      if (await db.conflicts.get(eventId)) {
+        result = { ok: false, errors: [{ field: 'id', message: CONFLICT_FIRST }] };
         return;
       }
       const applied = applyChangesLocally(current, parsed.data, meId, this.clock.now());
@@ -545,6 +565,8 @@ export class DataStore {
         const merged = diffChanges(last.snapshot, next);
         if (isEmptyChanges(merged)) {
           await db.outbox.delete(last.id);
+          // 送らずに戻したので、次の取得を全件にしてサーバーの版を取り直す
+          await db.setMeta('cursor', 0);
           const others = items.length > 1;
           await db.events.put({
             ...last.snapshot,
@@ -557,7 +579,7 @@ export class DataStore {
         await db.outbox.update(last.id, { body: { scope: 'all', changes: merged } });
       } else {
         await db.outbox.add(
-          this.newItem({
+          await this.newItem({
             eventId,
             kind: 'update',
             method: 'PATCH',
@@ -595,6 +617,8 @@ export class DataStore {
     await db.transaction('rw', [db.events, db.outbox, db.conflicts], async () => {
       const current = await db.events.get(eventId);
       if (!current || !canSeeContent(current, meId)) return;
+      // 競合中の予定は、C-05 で解決するまで消さない
+      if (await db.conflicts.get(eventId)) return;
       const pending = (await this.itemsFor(eventId)).filter((o) => this.isUnsent(o));
       const unsentCreate = pending.find((o) => o.kind === 'create');
       await db.outbox.bulkDelete(pending.map((o) => o.id));
@@ -608,7 +632,7 @@ export class DataStore {
         return;
       }
       const serverState = pending.find((o) => o.snapshot)?.snapshot ?? current;
-      const item = this.newItem({
+      const item = await this.newItem({
         eventId,
         kind: 'delete',
         method: 'DELETE',
@@ -626,16 +650,21 @@ export class DataStore {
 
   private async undoDelete(item: OutboxItem, before: LocalEvent): Promise<void> {
     const db = this.db;
-    await db.transaction('rw', [db.events, db.outbox], async () => {
+    await db.transaction('rw', [db.events, db.outbox, db.meta], async () => {
       const stored = await db.outbox.get(item.id);
       const stillPending = stored !== undefined && this.isUnsent(stored);
       if (stillPending) {
         await db.outbox.delete(item.id);
-        const serverState = item.snapshot;
+        // 送らずに取り消したので、次の取得を全件にしてサーバーの版を取り直す
+        await db.setMeta('cursor', 0);
+        // 書き換え済みの If-Match を古い版に戻さないように、保存されている値を使う
+        const serverState = stored.snapshot
+          ? { ...stored.snapshot, version: stored.baseVersion ?? stored.snapshot.version }
+          : null;
         const changes = serverState ? diffChanges(serverState, before) : {};
         if (serverState && !isEmptyChanges(changes)) {
           await db.outbox.add(
-            this.newItem({
+            await this.newItem({
               eventId: before.id,
               kind: 'update',
               method: 'PATCH',
@@ -653,7 +682,7 @@ export class DataStore {
       }
       // もう送った（かもしれない）削除は、復元を送る
       await db.outbox.add(
-        this.newItem({
+        await this.newItem({
           eventId: before.id,
           kind: 'restore',
           method: 'POST',
@@ -689,10 +718,11 @@ export class DataStore {
 
   async resolveConflict(eventId: string, choice: 'theirs' | 'mine' | 'both'): Promise<void> {
     const db = this.db;
-    const conflict = await db.conflicts.get(eventId);
-    if (!conflict) return;
-    const theirs: LocalEvent = { ...conflict.theirs, sync: 'synced' };
     await db.transaction('rw', [db.events, db.outbox, db.conflicts], async () => {
+      // 取得が取り込んだ最新の theirs を使うため、トランザクションの中で読む
+      const conflict = await db.conflicts.get(eventId);
+      if (!conflict) return;
+      const theirs: LocalEvent = { ...conflict.theirs, sync: 'synced' };
       await db.conflicts.delete(eventId);
       // 家族が消していたら、「家族の変更を採用」は消す、ほかは自分の予定を新しく作る
       if (conflict.theirsDeleted) {
@@ -708,7 +738,7 @@ export class DataStore {
         if (conflict.kind === 'delete' || !conflict.mine) {
           await db.events.delete(eventId);
           await db.outbox.add(
-            this.newItem({
+            await this.newItem({
               eventId,
               kind: 'delete',
               method: 'DELETE',
@@ -724,7 +754,7 @@ export class DataStore {
         const mine: LocalEvent = { ...conflict.mine, version: theirs.version, sync: 'pending' };
         await db.events.put(mine);
         await db.outbox.add(
-          this.newItem({
+          await this.newItem({
             eventId,
             kind: 'update',
             method: 'PATCH',
@@ -748,7 +778,7 @@ export class DataStore {
     const copy: LocalEvent = { ...mine, id: copyId, version: 0, sync: 'pending' };
     await this.db.events.put(copy);
     await this.db.outbox.add(
-      this.newItem({
+      await this.newItem({
         eventId: copyId,
         kind: 'create',
         method: 'POST',

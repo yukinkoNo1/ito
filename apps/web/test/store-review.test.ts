@@ -3,7 +3,7 @@ import { type EventDTO, fakeClock, fromJst, type MeDTO, memberSettingsSchema } f
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { Fetcher } from '../src/data/api';
 import { ItoDb } from '../src/data/db';
-import { DataStore } from '../src/data/store';
+import { CONFLICT_FIRST, DataStore } from '../src/data/store';
 import { ev, M, members } from './fixtures';
 
 /** Phase 1 のレビューで見つかった PWA のデータ層の不具合（WD-01〜14）の再現テスト */
@@ -224,23 +224,36 @@ describe('Phase 1 のレビューの指摘（PWA のデータ層）', () => {
     expect(await db.events.get(base.id)).toBeUndefined();
   });
 
-  it('WD-05: 競合中の予定を編集して送れたら、競合の記録を消す', async () => {
+  // Phase 2 のレビュー（SYNC-01）で、競合中の編集は解決するまで受け付けないことにした。
+  // 競合の記録が残ったままにならないことは、解決（自分の変更で上書き）を送れた場合で確かめる
+  it('WD-05: 競合を解決して送れたら、競合の記録は残らない（競合中の編集は受け付けない）', async () => {
     const base = ev({ title: 'A', memberIds: [M.papa], ownerId: M.papa, version: 1 });
     await db.events.put(base);
     const theirs = { ...serverEvent(base, 2), title: '家族' };
     let conflictNow = true;
-    const { store } = storeWith(() =>
+    const { store, calls } = storeWith((c) =>
       conflictNow
         ? { status: 409, body: { code: 'conflict', status: 409, event: theirs } }
-        : { status: 200, body: { event: { ...serverEvent(base, 3), title: 'もう一度' } } },
+        : {
+            status: 200,
+            body: {
+              event: {
+                ...serverEvent(base, 3),
+                title: (c.body as { changes: { title: string } }).changes.title,
+              },
+            },
+          },
     );
     await store.updateEvent(base.id, { title: '自分' });
     await store.push();
     conflictNow = false;
-    await store.updateEvent(base.id, { title: 'もう一度' });
+    expect((await store.updateEvent(base.id, { title: 'もう一度' })).ok).toBe(false);
+    expect(await db.conflicts.count()).toBe(1);
+    await store.resolveConflict(base.id, 'mine');
     await store.push();
+    expect(calls.at(-1)?.headers['if-match']).toBe('2');
     expect(await db.conflicts.count()).toBe(0);
-    expect(await db.events.get(base.id)).toMatchObject({ title: 'もう一度', sync: 'synced' });
+    expect(await db.events.get(base.id)).toMatchObject({ title: '自分', sync: 'synced' });
   });
 
   it('WD-14: 中身の変わらない編集は送らない。保存のあとの「元に戻す」で畳んで元に戻れば送信待ちを消す', async () => {
@@ -285,5 +298,171 @@ describe('Phase 1 のレビューの指摘（PWA のデータ層）', () => {
     await second;
     expect(calls.filter((c) => c.method === 'PATCH')).toHaveLength(2);
     expect(await db.outbox.count()).toBe(0);
+  });
+});
+
+describe('Phase 2 のレビューの指摘（同期）', () => {
+  it('SYNC-01: 競合中の予定は、解決するまで編集も削除もできない（自分の変更が黙って消えない）', async () => {
+    const base = ev({ title: 'A', memberIds: [M.papa], ownerId: M.papa, version: 2 });
+    await db.events.put({ ...base, title: 'B', sync: 'conflict' });
+    await db.conflicts.put({
+      eventId: base.id,
+      mine: { ...base, title: 'B', sync: 'conflict' },
+      theirs: serverEvent(base, 2, { title: 'C' }),
+      changes: { title: 'B' },
+      kind: 'update',
+      createdAt: clock.now(),
+    });
+    const { store } = storeWith(() => ({ status: 500 }));
+    const r = await store.updateEvent(base.id, { title: 'D' });
+    expect(r).toMatchObject({ ok: false, errors: [{ message: CONFLICT_FIRST }] });
+    const d = await store.deleteEvent(base.id);
+    expect(d.ok).toBe(false);
+    expect(await db.outbox.count()).toBe(0);
+    expect(await db.events.get(base.id)).toMatchObject({ title: 'B', sync: 'conflict' });
+    expect(await db.conflicts.get(base.id)).toMatchObject({ changes: { title: 'B' } });
+  });
+
+  it('SYNC-02: サーバーが拒んだ変更を戻したら、次の取得を全件にする（そのあいだの家族の変更を取り直す）', async () => {
+    const base = ev({ title: 'A', memberIds: [M.papa], ownerId: M.papa, version: 1 });
+    await db.events.put(base);
+    await db.setMeta('cursor', 5);
+    const { store, calls, realSync } = storeWith((c) => {
+      if (c.path === '/api/me') return { status: 200, body: me };
+      if (c.path.startsWith('/api/sync')) return { status: 200, body: syncBody() };
+      return {
+        status: 422,
+        body: { type: 'urn:ito:problem:validation', title: '入力を確かめてください', status: 422 },
+      };
+    });
+    await store.updateEvent(base.id, { title: 'B' });
+    await realSync();
+    expect(await db.events.get(base.id)).toMatchObject({ title: 'A' });
+    expect(calls.filter((c) => c.path.startsWith('/api/sync')).map((c) => c.path)).toEqual([
+      '/api/sync?cursor=0',
+    ]);
+  });
+
+  it('SYNC-02: 送らずに打ち消した編集・送らずに取り消した削除も、次の取得を全件にする', async () => {
+    const base = ev({ title: 'A', memberIds: [M.papa], ownerId: M.papa, version: 1 });
+    await db.events.put(base);
+    const { store } = storeWith(() => ({ status: 500 }));
+    await db.setMeta('cursor', 5);
+    await store.updateEvent(base.id, { title: 'B' });
+    await store.updateEvent(base.id, { title: 'A' });
+    expect(await db.outbox.count()).toBe(0);
+    expect(await db.getMeta('cursor')).toBe(0);
+
+    await db.setMeta('cursor', 7);
+    const d = await store.deleteEvent(base.id);
+    await d.undo();
+    expect(await db.outbox.count()).toBe(0);
+    expect(await db.getMeta('cursor')).toBe(0);
+    expect(await db.events.get(base.id)).toMatchObject({ title: 'A' });
+  });
+
+  it('SYNC-04: 削除の取り消しは、送信のあいだに書き換わった版（If-Match）を使う', async () => {
+    const base = ev({ title: 'A', memberIds: [M.papa], ownerId: M.papa, version: 1 });
+    await db.events.put(base);
+    let arrived: () => void = () => {};
+    const arrivedP = new Promise<void>((r) => {
+      arrived = r;
+    });
+    let release: () => void = () => {};
+    const gate = new Promise<void>((r) => {
+      release = r;
+    });
+    const { store } = storeWith(async (c) => {
+      if (c.method === 'PATCH') {
+        arrived();
+        await gate;
+        return { status: 200, body: { event: serverEvent(base, 2, { title: 'B' }) } };
+      }
+      // 削除は 429 で待たせる（送っていない＝取り消せる）
+      return { status: 429, headers: { 'Retry-After': '30' } };
+    });
+    await store.updateEvent(base.id, { title: 'B' });
+    const pushing = store.push();
+    await arrivedP;
+    // 編集を送っているあいだに削除する
+    const d = await store.deleteEvent(base.id);
+    release();
+    expect(await pushing).toBe('waiting');
+    await d.undo();
+    expect(await db.outbox.count()).toBe(0);
+    expect(await db.events.get(base.id)).toMatchObject({ title: 'B', version: 2 });
+  });
+
+  it('SYNC-05: 429 の Retry-After の待ちは、再試行でも解かない', async () => {
+    const base = ev({ title: 'A', memberIds: [M.papa], ownerId: M.papa, version: 1 });
+    await db.events.put(base);
+    let patches = 0;
+    const { store, calls, realSync } = storeWith((c) => {
+      if (c.path === '/api/me') return { status: 200, body: me };
+      if (c.path.startsWith('/api/sync')) return { status: 200, body: syncBody() };
+      patches++;
+      if (patches === 1) return { status: 429, headers: { 'Retry-After': '30' } };
+      return { status: 200, body: { event: serverEvent(base, 2, { title: 'B' }) } };
+    });
+    await store.updateEvent(base.id, { title: 'B' });
+    expect(await store.push()).toBe('waiting');
+    await realSync({ retryNow: true });
+    expect(calls.filter((c) => c.method === 'PATCH')).toHaveLength(1);
+    clock.advance(31_000);
+    await realSync();
+    expect(calls.filter((c) => c.method === 'PATCH')).toHaveLength(2);
+    expect(await db.outbox.count()).toBe(0);
+  });
+
+  it('SYNC-07: 端末の時計が戻っても、あとから積んだ送信待ちは後ろに並び、待ちが上限を超えていたら送る', async () => {
+    const c = fakeClock(fromJst('2026-09-29', '07:30'));
+    const a = ev({ title: 'A', memberIds: [M.papa], ownerId: M.papa, version: 1 });
+    const b = ev({ title: 'B', memberIds: [M.papa], ownerId: M.papa, version: 1 });
+    await db.events.bulkPut([a, b]);
+    let online = false;
+    const { fetcher, calls } = fakeFetch((call) => {
+      if (!online) return 'network';
+      const base = call.path.endsWith(a.id) ? a : b;
+      const title = (call.body as { changes: { title: string } }).changes.title;
+      return { status: 200, body: { event: serverEvent(base, 2, { title }) } };
+    });
+    const store = new DataStore(db, c, fetcher);
+    store.syncNow = async () => {};
+    await store.updateEvent(a.id, { title: 'A2' });
+    c.advance(-10 * 60_000);
+    await store.updateEvent(b.id, { title: 'B2' });
+    const order = (await db.outbox.orderBy('createdAt').toArray()).map((o) => o.eventId);
+    expect(order).toEqual([a.id, b.id]);
+    expect(await store.push()).toBe('network');
+    // 時計が 2 時間戻った（待ちが 1 時間を超える）
+    c.advance(-2 * 3600_000);
+    online = true;
+    expect(await store.push()).toBe('ok');
+    expect(calls.map((x) => x.path)).toEqual([
+      `/api/events/${a.id}`,
+      `/api/events/${a.id}`,
+      `/api/events/${b.id}`,
+    ]);
+  });
+
+  it('SYNC-08: 通信エラーのあと、つながった同期で（再試行を押さなくても）すぐ送り直す', async () => {
+    const base = ev({ title: 'A', memberIds: [M.papa], ownerId: M.papa, version: 1 });
+    await db.events.put(base);
+    let online = false;
+    const { store, calls, realSync } = storeWith((c) => {
+      if (!online) return 'network';
+      if (c.path === '/api/me') return { status: 200, body: me };
+      if (c.path.startsWith('/api/sync')) return { status: 200, body: syncBody() };
+      return { status: 200, body: { event: serverEvent(base, 2, { title: 'B' }) } };
+    });
+    await store.updateEvent(base.id, { title: 'B' });
+    expect(await store.push()).toBe('network');
+    online = true;
+    // 時計は進めない（バックオフの途中）。online イベントや 60 秒ごとの同期と同じ、retryNow なしの呼び出し
+    await realSync();
+    expect(calls.filter((c) => c.method === 'PATCH')).toHaveLength(2);
+    expect(await db.outbox.count()).toBe(0);
+    expect(store.getState()).toMatchObject({ status: 'synced', block: null });
+    expect(await db.events.get(base.id)).toMatchObject({ title: 'B', version: 2, sync: 'synced' });
   });
 });

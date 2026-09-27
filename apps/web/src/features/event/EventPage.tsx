@@ -130,7 +130,7 @@ export function EventPage() {
         <button type="button" className="min-h-11 px-3" onClick={() => navigate(-1)}>
           閉じる
         </button>
-        {vm.canEdit && (
+        {vm.canEdit && !data.conflict && (
           <>
             <button type="button" className="min-h-11 px-3" onClick={() => openComposer('edit')}>
               編集

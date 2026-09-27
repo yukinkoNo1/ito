@@ -60,6 +60,11 @@ export async function promptInstall(): Promise<boolean> {
   return choice.outcome === 'accepted';
 }
 
+/** ホーム画面から開いたときに永続化を求める。iOS は appinstalled が出ないので、起動のたびに確かめる（§17） */
+export async function persistIfInstalled(): Promise<void> {
+  if (isStandalone()) await requestPersistence();
+}
+
 /** インストール後に永続化を要求する（§17） */
 export async function requestPersistence(): Promise<void> {
   try {

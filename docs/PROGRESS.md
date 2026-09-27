@@ -1,12 +1,12 @@
 # 進み具合
-今: Phase 2（PWA とローカルファースト） / 次にやること: Phase 1 のレビューの PWA のデータ層の指摘（WD-01〜15）を直す → Phase 2 の受け入れ基準の確認 → レビュー → phase-2
+今: Phase 6（UI 統合） / 次にやること: 退避した Phase 6 の作業中の変更（git stash「phase6-wip」）を戻す → 画面を store・viewmodels につなぐ → 受け入れ基準 → レビュー → phase-6
 
 ## ステップ
 | ステップ | 状態（未着手・作業中・完了） | タグ | メモ |
 |---|---|---|---|
 | Phase 0 土台 | 完了 | phase-0 | レビューの指摘（dist-e2e のコミット、zod の jitless の順番、421/413 の no-store など）を直した |
 | Phase 1 予定の中核と表示用フィード | 完了 | phase-1 | レビューの指摘（非公開→公開の履歴の漏えい、通知設定の部分更新、送信待ちの畳み込み、確認スクリプトの後始末）を直した |
-| Phase 2 PWA とローカルファースト | 作業中 | phase-2 | |
+| Phase 2 PWA とローカルファースト | 完了 | phase-2 | レビューの指摘（ログアウトで SW の登録が残る、SW を通る遷移のテスト、競合中の編集で自分の変更が消える、送らずに戻した変更のあとの取得、429 の待ち、426 の更新、時計の巻き戻し ほか）を直した |
 | Phase 6 UI 統合 | 未着手 | phase-6 | Phase 2 の次に行う（§24 D15） |
 | Phase 3 繰り返し | 未着手 | phase-3 | |
 | Phase 4 通知 | 未着手 | phase-4 | |
@@ -46,16 +46,20 @@
 | Phase 1 | 履歴の差分（人が読める文字列） | events.test.ts「作成・更新・削除・復元が残り、差分は人が読める文字列」 | OK |
 | Phase 1 | `pnpm check`・`docker compose build` | `pnpm check`（188 件）、`docker compose build`・`up -d --wait`・`down` | OK |
 | Phase 2 | オフライン閲覧・オフライン作成 → 復帰で送信 | E2E e2e/phase2.spec.ts「オフラインで閲覧・作成 → 復帰で送信」（context.setOffline。SW がアプリシェルを返し、IndexedDB から描画） | OK |
-| Phase 2 | API だけ遮断した状態（Tailscale 切断の再現）でも同じ | E2E「Tailscale だけ切れた状態でも…」（context.route で /api/** を abort → C-02「家のサーバーにつながりません（Tailscale を確認）」→ 再試行で送信） | OK |
-| Phase 2 | 別のメンバーが追加した予定に「新」が付き、次に開いたときには消える | E2E「別のメンバーが追加した予定に「新」が付き…」（同じ回のあいだは消えない・「新しい予定 n件」）、web viewmodels.test.ts「新着の印」 | OK |
+| Phase 2 | API だけ遮断した状態（Tailscale 切断の再現）でも同じ | E2E「Tailscale だけ切れた状態でも、読み込み直して見られ…」（context.route で /api/** を abort → 読み込み直しても IndexedDB から表示・C-02「家のサーバーにつながりません（Tailscale を確認）」→ 解除後、再試行を押さずに 60 秒ごとの同期（page.clock.runFor）で送信）、store-review.test.ts「SYNC-08」（つながった同期でバックオフ中の送信待ちをすぐ送る） | OK |
+| Phase 2 | 別のメンバーが追加した予定に「新」が付き、次に開いたときには消える | E2E「別のメンバーが追加した予定に「新」が付き…」（同じ回のあいだは消えない・「新しい予定 n件」）、E2E「背面に回して前面に戻したときも…」（visibilitychange の経路）、web viewmodels.test.ts「新着の印」 | OK |
 | Phase 2 | 同じ予定をオフラインで 2 回編集しても自分の変更どうしで 409 にならない | E2E「同じ予定をオフラインで 2 回編集しても…」、web store.test.ts「更新どうし → 1 件」「送信中の変更には畳まず…If-Match を書き換える」、store-review.test.ts「WD-01」 | OK |
-| Phase 2 | 競合を起こして 3 通りの解決 | E2E「競合を起こして解決する: 家族の変更を採用／自分の変更で上書き／両方残す」、store.test.ts「競合の 3 通りの解決」 | OK |
-| Phase 2 | `/api/*` が Cache Storage に入らない | E2E「/api/* は Cache Storage に入らない…」（/api/export へのページ遷移も index.html にならない） | OK |
+| Phase 2 | 競合を起こして 3 通りの解決 | E2E「競合を起こして解決する: 家族の変更を採用／自分の変更で上書き／両方残す」（解決までは編集・削除が出ない、解決後の手元の一覧とサーバーの両方を確かめる）、store.test.ts「競合の 3 通りの解決」、store-review.test.ts「SYNC-01」 | OK |
+| Phase 2 | `/api/*` が Cache Storage に入らない | E2E「/api/* は Cache Storage に入らない」（SW の管理下で画面を移ったあと、Cache Storage の URL に /api/ がない） | OK |
+| Phase 2 | `/api/*`・`/healthz` へのページ遷移を SW が index.html で返さない（§17） | E2E「/api/export・/healthz へのページ遷移は、SW の管理下でも index.html にならない」（page.goto。fromServiceWorker が false・text/html でない・#root がない） | OK |
 | Phase 2 | 「更新」を押すと新しい SW に切り替わる | E2E「「更新」を押すと新しい SW に切り替わる」（E2E 用ビルドの sw.js を一時的に書き換え → 待機 → 案内 → 更新 → waiting なし・activated） | OK |
 | Phase 2 | manifest の警告がなくインストール可能 | E2E「インストールできる」（CDP の Page.getInstallabilityErrors が空、Page.getAppManifest のエラーなし。§24 D25） | OK |
 | Phase 2 | §12 の応答ごとの扱い（409 は後続を止めない、404/410、422/403、401/403 not_member、426、429、5xx・通信エラーの指数バックオフ最大 1 時間、全件同期） | web test/store.test.ts・store-review.test.ts（fake-indexeddb） | OK |
-| Phase 2 | S-11 はじめて（2 画面）・S-12・ホームの案内（閉じたら出ない）・この端末からログアウト | E2E「はじめて（色 → 使い方）→ ホームの案内…」「この端末からログアウト」、web logout.test.ts | OK |
-| Phase 2 | 全テストで CSP 違反・コンソールエラー 0 件 | e2e/fixtures.ts（auto。ネットワークを切るテストでだけ、Chromium 自身が出す「Failed to load resource」の該当するものを許す） | OK |
+| Phase 2 | S-11 はじめて（2 画面）・S-12・ホームの案内（閉じたら出ない）・この端末からログアウト | E2E「はじめて（色 → 使い方）→ ホームの案内…」（ほかの家族の色は選べない・選んだ色がサーバーに保存される）、E2E「ホーム画面から開いている（インストール済み）ときは…案内を出さない」、E2E「この端末からログアウト（…そのあともオフラインで開ける）」（SW の登録を外して入り直す）、web logout.test.ts（SW の登録の解除・ホーム画面から開いたら永続化を求める） | OK |
+| Phase 2 | 全テストで CSP 違反・コンソールエラー 0 件 | e2e/fixtures.ts（auto。すべてのテストで同じ page を監視する。ネットワークを切るテストでだけ、Chromium 自身が出す「Failed to load resource」のうち、意図して失敗させた /api/ への要求のものを許す） | OK |
+| Phase 2 | §12 の同期の細則（§24 D28） | store-review.test.ts「SYNC-01」（競合中は編集・削除しない）「SYNC-02」（送らずに戻したら次は全件の取得）「SYNC-04」（削除の取り消しは書き換わった版を使う）「SYNC-05」（再試行でも 429 の待ちは解かない）「SYNC-07」（時計が戻っても順番どおり・待ちの上限）「SYNC-08」 | OK |
+| Phase 2 | 本番のビルドに開発用のログイン（X-Dev-Login）が残らない | `pnpm build` のあと apps/web/dist の JS を「X-Dev-Login」「ito.devLogin」で検索 → 0 件 | OK（Phase 7 の T7 のビルド成果物の検査にも入れる） |
+| Phase 2 | `pnpm check`・`pnpm test:e2e`・`docker compose build` | `pnpm check`（233 件）、`pnpm test:e2e`（18 件）、`docker compose build` | OK（すべて EXIT=0） |
 
 ## 決めたこと（SPEC §24 に書いたもの）
 - D15: 作業の順番（Phase 6 を Phase 2 の次に）。後のフェーズの機能が要る受け入れ項目は「後で確認」
@@ -71,10 +75,12 @@
 - D25: 手で確かめる受け入れ項目の代わり（CDP の Page.getInstallabilityErrors、long task）
 - D26: 前回開いた時刻などは localStorage（端末ごと）。作成・更新の時刻はミリ秒まで
 - D27: 履歴の非公開の扱い（公開前の差分は持ち主だけ、非公開にしたら前の履歴も持ち主だけ）
+- D28: 同期の細則（競合中は解決まで編集・削除しない、再試行でも 429 の待ちは解かない、時計が戻っても送る順番を守る、送らずに戻したら次は全件の取得、426 で「更新」、ログアウトで SW の登録も外す、ホーム画面から開いたら永続化を求める）
 
 ## 後で足すテスト
 - 非公開の漏えい（まだない経路）: 書き出し（JSON・ICS。Phase 7）、Push の文面（Phase 4）、朝のまとめ・前夜の予告（Phase 4）、一言入力の重なりの警告（Phase 5。端末内で作るので他人の非公開は「予定あり」になることを確かめる）、検索（Phase 7。端末内の DB を検索する）
 - 表示用フィードの例のファイルとの比較に朝練（繰り返し）を含める・例外がフィードに出る（Phase 3）
+- T7 のビルド成果物の検査（sk-ant）に「X-Dev-Login」「ito.devLogin」を足す（Phase 7）
 
 ## 要確認（持ち主がやること・確かめてほしいこと。根拠の出力も）
 - **Node.js 24 LTS が開発機に入っていない**（管理者権限のインストールは持ち主の作業）。手元の開発・テストは Node 22 で行い、本番のイメージ（node:24-slim）では 24 で動くことを docker compose で確かめている（§24 D19）。
@@ -83,5 +89,6 @@
 - pnpm は PC 全体には入れず、corepack の shim をリポジトリ内の `.tools/bin`（.gitignore 済み）に置いて使っている（`corepack enable --install-directory .tools/bin pnpm`）。版は package.json の packageManager（pnpm@10.34.5）
 
 ## 既知の問題
-- E2E のコンソールエラー 0 件の確認では、ネットワークを切るテスト（オフライン・API 遮断・競合）に限り、Chromium が自分で出す「Failed to load resource: net::ERR_INTERNET_DISCONNECTED / net::ERR_FAILED / status of 409」を許している（テストで意図して起こした失敗。アプリのエラーは許さない。e2e/fixtures.ts の allowedConsoleErrors）
+- E2E のコンソールエラー 0 件の確認では、ネットワークを切るテスト（オフライン・API 遮断・競合・ログアウトのあとのオフライン）と /api/export への遷移のテストに限り、Chromium が自分で出す「Failed to load resource」のうち、意図して失敗させた /api/ への要求のもの（net::ERR_INTERNET_DISCONNECTED / net::ERR_FAILED / status of 409 / /api/export の 4xx）だけを許している（URL で絞る。アプリシェル・アイコンなどの失敗やアプリのエラーは許さない。e2e/fixtures.ts の allowedConsoleErrors）
+- E2E を `--repeat-each` で繰り返すと、同じサーバーに同じ件名の予定が残るため 2 回目から件名の重複で落ちる（1 回目はすべて通る。E2E のサーバーは実行のたびに空の DB で始まる。retries は 0）
 - vite-plugin-pwa 1.3 が Vite 8 で「inlineDynamicImports option is deprecated」の警告を出す（ビルドは成功する。プラグイン側の問題）
