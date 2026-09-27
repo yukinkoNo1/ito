@@ -1,0 +1,49 @@
+name: ito
+services:
+  ts:
+    image: tailscale/tailscale:stable
+    hostname: ito
+    environment:
+      TS_AUTHKEY: ${TS_AUTHKEY}
+      TS_AUTH_ONCE: "true"      # 既定では起動のたびに再ログインし、期限切れの鍵だと上がらなくなる
+      TS_HOSTNAME: ito
+      TS_STATE_DIR: /var/lib/tailscale
+      TS_SERVE_CONFIG: /config/serve.json
+      TS_USERSPACE: "false"     # カーネルモード（§14。userspace だと tailnet から :8787 に直接届く）
+    devices:
+      - /dev/net/tun:/dev/net/tun
+    cap_add: [NET_ADMIN]
+    volumes:
+      - ts-state:/var/lib/tailscale
+      - ./ts-serve:/config:ro   # ファイル単体ではなくディレクトリでマウント（更新検知のため）
+    restart: unless-stopped
+
+  app:
+    build: ..
+    network_mode: service:ts    # ts と同じ名前空間。127.0.0.1:8787 には Serve からしか届かない
+    depends_on: [ts]
+    init: true                  # SIGTERM を Node に届け、DB を閉じてから終了させる
+    env_file: app.env           # 秘密情報。TS_AUTHKEY はここに入れない
+    environment:
+      NODE_ENV: production
+      HOST: 127.0.0.1
+      PORT: "8787"
+      DATABASE_PATH: /data/ito.db
+      BACKUP_DIR: /data/backups
+    volumes:
+      - ito-data:/data
+    read_only: true
+    tmpfs: [/tmp]
+    user: "10001:10001"
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8787/healthz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+volumes:
+  ts-state:
+  ito-data:

@@ -1,0 +1,22 @@
+# Windows 用にビルドされた依存や秘密情報をイメージに入れない（RUNBOOK 4.）
+**/node_modules
+**/dist
+**/dist-e2e
+.git
+.tools
+.logs
+.data
+design
+docs
+e2e
+test-results
+playwright-report
+blob-report
+deploy/.env
+deploy/app.env
+deploy/*.env
+deploy/compose.override.yaml
+**/*.db
+**/*.db-wal
+**/*.db-shm
+apps/server/public
