@@ -12,7 +12,10 @@ import { csrf, protocolVersion } from './middleware/csrf';
 import { hostCheck } from './middleware/host';
 import { identity } from './middleware/identity';
 import { securityHeaders } from './middleware/security-headers';
+import { registerEventRoutes } from './routes/events';
+import { registerFeedRoutes } from './routes/feed';
 import { registerMeRoutes } from './routes/me';
+import { registerMemberRoutes } from './routes/members';
 import type { AppEnv } from './types';
 
 export const BODY_LIMIT_BYTES = 32 * 1024;
@@ -100,7 +103,10 @@ export function createApp(deps: AppDeps): App {
     return userChain(c, next);
   });
 
+  registerFeedRoutes(app, deps);
   registerMeRoutes(app, deps);
+  registerEventRoutes(app, deps);
+  registerMemberRoutes(app, deps);
 
   if (deps.staticDir) app.use('*', staticFiles(deps.staticDir));
 
