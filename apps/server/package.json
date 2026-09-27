@@ -1,0 +1,31 @@
+{
+  "name": "@ito/server",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch --env-file=dev.env --env-file-if-exists=../../.data/dev.secrets.env src/main.ts",
+    "build": "node build.mjs",
+    "typecheck": "tsc -p tsconfig.json",
+    "db:generate": "drizzle-kit generate",
+    "db:migrate": "tsx --env-file=dev.env scripts/migrate.ts",
+    "seed": "tsx --env-file=dev.env scripts/seed.ts",
+    "cli": "tsx --env-file=dev.env src/cli.ts"
+  },
+  "dependencies": {
+    "better-sqlite3": "13.0.3"
+  },
+  "devDependencies": {
+    "@hono/node-server": "2.1.1",
+    "@ito/core": "workspace:*",
+    "@types/better-sqlite3": "9.6.0",
+    "@types/node": "24.19.0",
+    "drizzle-kit": "0.31.11",
+    "drizzle-orm": "0.45.3",
+    "esbuild": "0.28.2",
+    "hono": "4.13.9",
+    "pino": "10.3.1",
+    "tsx": "4.23.15",
+    "zod": "4.6.5"
+  }
+}
