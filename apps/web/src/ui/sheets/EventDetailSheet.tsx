@@ -221,6 +221,7 @@ export function RecurrenceScopeDialog({
   action,
   offline,
   lost,
+  thisBlocked = null,
   onChoose,
   onCancel,
 }: RecurrenceScopeDialogProps) {
@@ -238,7 +239,10 @@ export function RecurrenceScopeDialog({
           <strong>どの予定を{verb}しますか？</strong>
           <Button onClick={onCancel}>閉じる</Button>
         </div>
-        <Button onClick={() => onChoose('this')}>この予定だけ</Button>
+        <Button disabled={Boolean(thisBlocked)} onClick={() => onChoose('this')}>
+          この予定だけ
+          {thisBlocked && <small>{thisBlocked}</small>}
+        </Button>
         <Button disabled={offline} onClick={() => onChoose('following')}>
           これ以降すべて
           {lost.following > 0 && (

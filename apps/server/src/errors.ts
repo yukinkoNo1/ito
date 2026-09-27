@@ -10,6 +10,7 @@ const TITLES: Record<string, string> = {
   misdirected: 'ホスト名が正しくありません',
   payload_too_large: '送信内容が大きすぎます',
   not_found: '見つかりません',
+  occurrence_not_found: 'この回は見つかりません',
   gone: 'この予定は削除されています',
   method_not_allowed: 'この方法では使えません',
   validation: '入力内容が正しくありません',

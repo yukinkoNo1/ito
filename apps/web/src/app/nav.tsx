@@ -40,6 +40,8 @@ interface NavApi {
   detail: { eventId: string; recurrenceId: string | null } | null;
   composer: ComposerParams | null;
   openEvent: (key: string) => void;
+  /** 開いている詳細を別の回に置き換える（繰り返しの回を保存して recurrenceId が変わったとき） */
+  replaceEvent: (key: string) => void;
   closeEvent: () => void;
   openComposer: (opts?: OpenComposerOptions) => void;
   closeComposer: () => void;
@@ -110,6 +112,15 @@ export function NavProvider({ children }: { children: ReactNode }) {
         navigate(
           { pathname: `/e/${eventId}`, search: rid ? `?r=${encodeURIComponent(rid)}` : '' },
           { state: { background } satisfies NavState },
+        );
+      },
+      replaceEvent: (key) => {
+        const at = key.indexOf('@');
+        const eventId = at === -1 ? key : key.slice(0, at);
+        const rid = at === -1 ? null : key.slice(at + 1);
+        navigate(
+          { pathname: `/e/${eventId}`, search: rid ? `?r=${encodeURIComponent(rid)}` : '' },
+          { replace: true, state: location.state },
         );
       },
       closeEvent: () => {

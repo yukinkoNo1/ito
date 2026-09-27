@@ -5,10 +5,12 @@
  * UTC の Date（Date.UTC(2026, 9, 3, 7, 30)）として渡し、返ってきた Date も UTC の各項目を壁時計として読む。
  * こうすると端末やサーバーのタイムゾーンに関係なく、同じ入力から同じ回が出る（JST は夏時間がない）。
  */
-import { RRule, Weekday as RRuleWeekday } from 'rrule';
+import * as rruleModule from 'rrule';
 import {
   addDays,
   type DateISO,
+  daysInMonth,
+  diffDays,
   isValidDate,
   parseDate,
   type TimeHM,
@@ -16,6 +18,18 @@ import {
   type Weekday,
   weekdayOf,
 } from './jst';
+
+/**
+ * rrule 2.8.1 は UMD（package.json に type も exports もない）。Vite・esbuild・Vitest は名前付きの export に
+ * 変換するが、Node の ESM（tsx の pnpm dev・seed・cli）では名前付きの export が見えず default に入る。どちらでも読む
+ */
+type RRuleModule = typeof rruleModule;
+const rruleLib: RRuleModule =
+  'RRule' in rruleModule && rruleModule.RRule
+    ? rruleModule
+    : (rruleModule as unknown as { default: RRuleModule }).default;
+const { RRule, Weekday: RRuleWeekday } = rruleLib;
+type RRuleInstance = InstanceType<typeof RRule>;
 
 /** 1 回の展開で出す回の上限（§11） */
 export const MAX_OCCURRENCES_PER_EXPAND = 2000;
@@ -198,6 +212,10 @@ export function parseRrule(input: string): RuleResult {
   if (rule.bySetPos.length > 0 && rule.byDay.length === 0 && rule.byMonthDay.length === 0) {
     return fail('繰り返しの指定が正しくありません');
   }
+  // 毎日で曜日を絞り、間隔が 7 の倍数だと、開始の曜日しか来ない（ほかの曜日なら回が 1 つも出ず、空回りする）
+  if (rule.freq === 'DAILY' && rule.byDay.length > 0 && rule.interval % 7 === 0) {
+    return fail('曜日を決めた繰り返しは「毎週」で指定してください');
+  }
   return { ok: true, rule };
 }
 
@@ -205,16 +223,28 @@ function dayCode(d: ByDay): string {
   return `${d.nth === null ? '' : d.nth}${DAY_CODES[d.weekday]}`;
 }
 
-/** 決まった順に並べた RRULE（保存・比較に使う） */
+/** 曜日の並び（月曜から。保存の並びと画面の並び） */
+const MONDAY_FIRST: Weekday[] = [1, 2, 3, 4, 5, 6, 0];
+
+function sortedDays(days: ByDay[]): ByDay[] {
+  const order = (d: ByDay) => MONDAY_FIRST.indexOf(d.weekday);
+  return [...days].sort((a, b) => (a.nth ?? 0) - (b.nth ?? 0) || order(a) - order(b));
+}
+
+function sortedNums(list: number[]): number[] {
+  return [...new Set(list)].sort((a, b) => a - b);
+}
+
+/** 決まった順に並べた RRULE（保存・比較に使う）。項目の順に加えて、値の並びもそろえる（曜日は月曜から・数は小さい順） */
 export function formatRrule(rule: RuleParts): string {
   const parts = [`FREQ=${rule.freq}`];
   if (rule.interval !== 1) parts.push(`INTERVAL=${rule.interval}`);
-  if (rule.byDay.length > 0) parts.push(`BYDAY=${rule.byDay.map(dayCode).join(',')}`);
-  if (rule.byMonthDay.length > 0) parts.push(`BYMONTHDAY=${rule.byMonthDay.join(',')}`);
-  if (rule.byMonth.length > 0) parts.push(`BYMONTH=${rule.byMonth.join(',')}`);
-  if (rule.byYearDay.length > 0) parts.push(`BYYEARDAY=${rule.byYearDay.join(',')}`);
-  if (rule.byWeekNo.length > 0) parts.push(`BYWEEKNO=${rule.byWeekNo.join(',')}`);
-  if (rule.bySetPos.length > 0) parts.push(`BYSETPOS=${rule.bySetPos.join(',')}`);
+  if (rule.byDay.length > 0) parts.push(`BYDAY=${sortedDays(rule.byDay).map(dayCode).join(',')}`);
+  if (rule.byMonthDay.length > 0) parts.push(`BYMONTHDAY=${sortedNums(rule.byMonthDay).join(',')}`);
+  if (rule.byMonth.length > 0) parts.push(`BYMONTH=${sortedNums(rule.byMonth).join(',')}`);
+  if (rule.byYearDay.length > 0) parts.push(`BYYEARDAY=${sortedNums(rule.byYearDay).join(',')}`);
+  if (rule.byWeekNo.length > 0) parts.push(`BYWEEKNO=${sortedNums(rule.byWeekNo).join(',')}`);
+  if (rule.bySetPos.length > 0) parts.push(`BYSETPOS=${sortedNums(rule.bySetPos).join(',')}`);
   if (rule.wkst !== null) parts.push(`WKST=${DAY_CODES[rule.wkst]}`);
   if (rule.count !== null) parts.push(`COUNT=${rule.count}`);
   if (rule.until !== null) parts.push(`UNTIL=${rule.until}`);
@@ -258,9 +288,9 @@ function rruleWeekday(w: Weekday): number {
   return (w + 6) % 7;
 }
 
-const ruleCache = new Map<string, RRule>();
+const ruleCache = new Map<string, RRuleInstance>();
 
-function toRRule(rule: RuleParts, dtstart: Wall): RRule {
+function toRRule(rule: RuleParts, dtstart: Wall): RRuleInstance {
   const key = `${formatRrule(rule)}|${dtstart.date}T${dtstart.time}`;
   const hit = ruleCache.get(key);
   if (hit) return hit;
@@ -377,7 +407,8 @@ function uiKind(
   | null {
   const extra =
     rule.byMonth.length + rule.bySetPos.length + rule.byYearDay.length + rule.byWeekNo.length;
-  if (extra > 0) return null;
+  // WKST は画面で作れない（書く画面を通すと落ちて規則が変わるので「カスタム」にする）
+  if (extra > 0 || rule.wkst !== null) return null;
   switch (rule.freq) {
     case 'DAILY':
       return rule.byDay.length === 0 && rule.byMonthDay.length === 0 ? { kind: 'daily' } : null;
@@ -576,22 +607,108 @@ export function suggestMonthEnd(startDate: DateISO): boolean {
 }
 
 /**
- * 「すべて」の日時の変更（§11）: 選んだ回の元の日時からの差分（日数）を、曜日・日の指定にも当てる。
- * 毎週の曜日・毎月の日（正の日付）・毎月の第 n 曜日の曜日をずらす。UI で作れない形はそのまま
+ * 「すべて」「これ以降」で回の日付を from から to へ動かしたときの規則（§11・§24 D34）。
+ * - 毎週: 曜日を同じ日数だけずらす
+ * - 毎月の日付: 動かした先の日にする（月末（-1）の規則で、動かした先も月末なら月末のまま）
+ * - 毎月の第 n 曜日: 動かした先の曜日と第 n にする（最終（-1）の規則で、先も最後の 7 日なら最終のまま）。
+ *   複数の第 n（第2・第4）で第 n が変わるとき・毎月の規則で月をまたいで動かすときは決められないので null
+ * - 毎日・毎年・画面で作れない形はそのまま（開始が動くだけ）
+ * 動かした先がずらした規則の回にならないとき（呼び出し側で isOccurrenceOf で確かめる）は保存しない
  */
-export function shiftRule(rule: RuleParts, deltaDays: number): RuleParts {
+export function shiftRule(rule: RuleParts, from: DateISO, to: DateISO): RuleParts | null {
+  const deltaDays = diffDays(from, to);
   if (deltaDays === 0) return rule;
   const kind = uiKind(rule);
   if (!kind) return rule;
-  const shiftWeekday = (w: Weekday) => ((((w + deltaDays) % 7) + 7) % 7) as Weekday;
-  if (kind.kind === 'weekly' || kind.kind === 'monthlyByWeekday') {
-    return { ...rule, byDay: rule.byDay.map((d) => ({ ...d, weekday: shiftWeekday(d.weekday) })) };
+  const { year, month, day } = parseDate(to);
+  const last = daysInMonth(year, month);
+  // 毎月の規則で月をまたいで動かすと、どの月の回をどこへ動かしたのかが決まらない
+  const monthly = kind.kind === 'monthlyByDate' || kind.kind === 'monthlyByWeekday';
+  if (monthly && from.slice(0, 7) !== to.slice(0, 7)) return null;
+  if (kind.kind === 'weekly') {
+    const shift = (w: Weekday) => ((((w + deltaDays) % 7) + 7) % 7) as Weekday;
+    return { ...rule, byDay: rule.byDay.map((d) => ({ ...d, weekday: shift(d.weekday) })) };
   }
-  if (kind.kind === 'monthlyByDate' && kind.day > 0) {
-    const day = kind.day + deltaDays;
-    return { ...rule, byMonthDay: [day >= 1 && day <= 31 ? day : day > 31 ? -1 : 1] };
+  if (kind.kind === 'monthlyByDate') {
+    return { ...rule, byMonthDay: [kind.day === -1 && day === last ? -1 : day] };
+  }
+  if (kind.kind === 'monthlyByWeekday') {
+    const weekday = weekdayOf(to);
+    const nthTo = Math.ceil(day / 7);
+    const inLastWeek = day + 7 > last;
+    if (kind.nth.length === 1) {
+      const nth = kind.nth[0] === -1 && inLastWeek ? -1 : nthTo;
+      return { ...rule, byDay: [{ weekday, nth }] };
+    }
+    const nthFrom = Math.ceil(parseDate(from).day / 7);
+    if (nthFrom !== nthTo) return null;
+    return { ...rule, byDay: rule.byDay.map((d) => ({ ...d, weekday })) };
   }
   return rule;
+}
+
+/** 毎月の日付・第 n 曜日の規則か（「すべて」で日付を動かすと、開始をその月の回に置き直す） */
+export function isMonthlyAnchored(rule: RuleParts): boolean {
+  const kind = uiKind(rule);
+  return kind?.kind === 'monthlyByDate' || kind?.kind === 'monthlyByWeekday';
+}
+
+/** 毎月の規則で、date の月（なければその後 12 か月のうち）の最初の回の日付 */
+export function monthlyAnchor(rule: RuleParts, date: DateISO): DateISO | null {
+  const first = `${date.slice(0, 7)}-01`;
+  const open: RuleParts = { ...rule, count: null, until: null };
+  const found = ruleStarts(
+    open,
+    { date: first, time: '00:00' },
+    { date: first, time: '00:00' },
+    { date: addDays(first, 400), time: '00:00' },
+    1,
+  );
+  return found[0]?.date ?? null;
+}
+
+/**
+ * 暗に決まる指定（毎週の曜日・毎月の日・毎年の月日は、書いていなければ開始から決まる）を書き足した規則。
+ * 書き方が違っても回が同じ規則を、同じ文字列にして比べるために使う
+ */
+function withImplicit(rule: RuleParts, dtstartDate: DateISO): RuleParts {
+  const { month, day } = parseDate(dtstartDate);
+  const none =
+    rule.byDay.length +
+      rule.byMonthDay.length +
+      rule.byMonth.length +
+      rule.byYearDay.length +
+      rule.byWeekNo.length ===
+    0;
+  if (rule.freq === 'WEEKLY' && rule.byDay.length === 0) {
+    return { ...rule, byDay: [{ weekday: weekdayOf(dtstartDate), nth: null }] };
+  }
+  if (rule.freq === 'MONTHLY' && rule.byDay.length === 0 && rule.byMonthDay.length === 0) {
+    return { ...rule, byMonthDay: [day] };
+  }
+  if (rule.freq === 'YEARLY' && none) return { ...rule, byMonth: [month], byMonthDay: [day] };
+  return rule;
+}
+
+/**
+ * 2 つの RRULE が同じ回を作るか（書き方・並びの違いは同じとみなす）。ignoreEnd なら COUNT・UNTIL を比べない
+ */
+export function sameRule(
+  a: string | null,
+  b: string | null,
+  dtstartDate: DateISO,
+  ignoreEnd = false,
+): boolean {
+  if (a === null || b === null) return a === b;
+  const pa = parseRrule(a);
+  const pb = parseRrule(b);
+  if (!pa.ok || !pb.ok) return a === b;
+  const canon = (r: RuleParts) =>
+    formatRrule({
+      ...withImplicit(r, dtstartDate),
+      ...(ignoreEnd ? { count: null, until: null } : {}),
+    });
+  return canon(pa.rule) === canon(pb.rule);
 }
 
 /** 日付に日数を足した壁時計 */

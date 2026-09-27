@@ -20,11 +20,11 @@ import { QUICK_TIMES, quickDates, saveLabelFor } from '../../viewmodels/composer
 import { buildDetail, draftToInput, eventToDraft, findOccurrence } from '../../viewmodels/detail';
 import { toOccurrenceVM } from '../../viewmodels/occurrence';
 import {
-  changesForScope,
-  changesStart,
   lostCounts,
+  occurrenceChanges,
   occurrenceEvent,
   type Scope,
+  thisScopeBlock,
 } from '../../viewmodels/series';
 
 /** S-04 予定の詳細（下から出るシート）。その項目だけ直す（FieldEditSheet）・C-05 競合の解決を中に重ねる */
@@ -48,6 +48,7 @@ export function EventDetailContainer() {
     eventId: string;
     action: 'edit' | 'delete';
     lost: { following: number; all: number };
+    thisBlocked: string | null;
     run: (scope: Scope) => Promise<void>;
   } | null>(null);
   const eventId = target?.eventId ?? null;
@@ -98,9 +99,8 @@ export function EventDetailContainer() {
 
   const saveFieldScope = async (fieldDraftToSave: EventDraftVM, scopeChoice: Scope) => {
     if (!rid) return;
-    const input = changesForScope(data.event, draftToInput(fieldDraftToSave), scopeChoice);
-    // 項目だけを直すときは繰り返しを変えない
-    delete input.rrule;
+    // 項目だけを直すときは繰り返しを変えない（送るのは回の今の中身との差分だけ。store が取る）
+    const { rrule: _rrule, ...input } = draftToInput(fieldDraftToSave);
     const r = await store.updateOccurrence(seriesId, rid, scopeChoice, input);
     if (!r.ok) {
       toast.show({
@@ -112,6 +112,11 @@ export function EventDetailContainer() {
     }
     setField(null);
     setScope(null);
+    // 日時を動かした・「これ以降」で新しいシリーズにしたら、詳細をその回に移す（レビュー P3-web-09）
+    const t = r.target;
+    if (t && (t.eventId !== seriesId || t.recurrenceId !== rid)) {
+      nav.replaceEvent(`${t.eventId}@${t.recurrenceId}`);
+    }
     toast.show({
       kind: 'undo',
       message: '保存しました',
@@ -124,13 +129,16 @@ export function EventDetailContainer() {
     if (!field) return;
     if (isSeries && rid && occEvent) {
       const draftToSave = field.draft;
+      const { rrule: _rrule, ...input } = draftToInput(draftToSave);
+      const diff = occurrenceChanges(data.event, occEvent, input, 'all');
       setScope({
         eventId: seriesId,
         action: 'edit',
         lost: lostCounts(data.event, data.overrides, rid, {
           action: 'edit',
-          startsChange: changesStart(occEvent, draftToInput(draftToSave)),
+          changes: diff.ok ? diff.changes : {},
         }),
+        thisBlocked: thisScopeBlock(data.event, input),
         run: (choice) => saveFieldScope(draftToSave, choice),
       });
       return;
@@ -177,7 +185,8 @@ export function EventDetailContainer() {
     setScope({
       eventId: seriesId,
       action: 'delete',
-      lost: lostCounts(data.event, data.overrides, rid, { action: 'delete', startsChange: false }),
+      lost: lostCounts(data.event, data.overrides, rid, { action: 'delete' }),
+      thisBlocked: null,
       run: (choice) => removeWith(choice),
     });
   };
@@ -265,6 +274,7 @@ export function EventDetailContainer() {
         action={scope?.action ?? 'edit'}
         lost={scope?.lost ?? { following: 0, all: 0 }}
         offline={offline}
+        thisBlocked={scope?.thisBlocked ?? null}
         onCancel={() => setScope(null)}
         onChoose={(choice) => void scope?.run(choice)}
         open={scope !== null}

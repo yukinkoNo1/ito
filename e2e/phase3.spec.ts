@@ -106,7 +106,8 @@ test('繰り返しを書いて、この予定だけ・これ以降すべて・�
     )
     .toEqual([
       [T, 'FREQ=WEEKLY;BYDAY=MO;UNTIL=20280306T235959', '2028-03-06T07:30:00+09:00'],
-      [`${T}（新）`, 'FREQ=WEEKLY;BYDAY=MO;COUNT=9', '2028-03-13T09:00:00+09:00'],
+      // 件名だけ直したので、例外で動かした 9:00 ではなく元の回の 7:30 から始まる（§24 D34）
+      [`${T}（新）`, 'FREQ=WEEKLY;BYDAY=MO;COUNT=9', '2028-03-13T07:30:00+09:00'],
     ]);
   await page
     .getByRole('dialog', { name: '予定の詳細' })

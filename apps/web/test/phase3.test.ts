@@ -21,10 +21,10 @@ import { monthEndQuestion } from '../src/viewmodels/composer-vm';
 import { draftToInput, emptyDraft, eventToDraft } from '../src/viewmodels/detail';
 import { groupByDay } from '../src/viewmodels/flow';
 import {
-  changesForScope,
-  changesStart,
   lostCounts,
+  occurrenceChanges,
   occurrenceEvent,
+  thisScopeBlock,
 } from '../src/viewmodels/series';
 import { ctx, ev, M, members } from './fixtures';
 
@@ -125,26 +125,51 @@ describe('範囲（C-04）の計算', () => {
     recurrenceId: '2026-10-22T07:00',
   });
 
-  it('消える件数: これ以降はその回以降、すべては開始が変わるときだけ、削除のすべては 0', () => {
+  it('消える件数: これ以降はその回以降、すべては開始が変わるとき全部・規則だけならその規則で回でなくなるもの、削除のすべては 0', () => {
+    // 件名だけ: 何も消えない
     expect(
-      lostCounts(master, [exception], '2026-10-15T07:00', { action: 'edit', startsChange: false }),
-    ).toEqual({
-      following: 2,
-      all: 0,
-    });
+      lostCounts(master, [exception], '2026-10-15T07:00', {
+        action: 'edit',
+        changes: { title: 'x' },
+      }),
+    ).toEqual({ following: 2, all: 0 });
+    // 時刻を変える: すべて消える（取り消し 2 件＋例外 1 件）
     expect(
-      lostCounts(master, [exception], '2026-10-15T07:00', { action: 'edit', startsChange: true }),
-    ).toEqual({
-      following: 2,
-      all: 3,
-    });
+      lostCounts(master, [exception], '2026-10-15T07:00', {
+        action: 'edit',
+        changes: { startAt: '2026-10-15T08:00:00+09:00', endAt: '2026-10-15T09:00:00+09:00' },
+      }),
+    ).toEqual({ following: 2, all: 3 });
+    // 終わりの回数だけ変える（レビュー P3-web-02・P3-server-03）: 回数 4（10/1〜10/22）で残らない 10/29 だけ
     expect(
-      lostCounts(master, [exception], '2026-10-15T07:00', { action: 'delete', startsChange: true })
-        .all,
-    ).toBe(0);
+      lostCounts(master, [exception], '2026-10-15T07:00', {
+        action: 'edit',
+        changes: { rrule: 'FREQ=WEEKLY;BYDAY=TH;COUNT=4' },
+      }).all,
+    ).toBe(1);
+    expect(lostCounts(master, [exception], '2026-10-15T07:00', { action: 'delete' }).all).toBe(0);
   });
 
-  it('回の今の中身（例外行があればそれ、なければ親をその回に）と、開始が変わるか', () => {
+  it('最初の回の「これ以降」は「すべて」と同じ件数。削除ならシリーズごとゴミ箱なので 0（レビュー P3-web-12）', () => {
+    expect(
+      lostCounts(master, [exception], '2026-10-01T07:00', {
+        action: 'edit',
+        changes: { title: 'x' },
+      }),
+    ).toEqual({ following: 0, all: 0 });
+    expect(
+      lostCounts(master, [exception], '2026-10-01T07:00', {
+        action: 'edit',
+        changes: { startAt: '2026-10-01T08:00:00+09:00', endAt: '2026-10-01T09:00:00+09:00' },
+      }),
+    ).toEqual({ following: 3, all: 3 });
+    expect(lostCounts(master, [exception], '2026-10-01T07:00', { action: 'delete' })).toEqual({
+      following: 0,
+      all: 0,
+    });
+  });
+
+  it('回の今の中身（例外行があればそれ、なければ親をその回に）', () => {
     expect(occurrenceEvent(master, [exception], '2026-10-22T07:00')?.title).toBe(
       'ヨガ（別の先生）',
     );
@@ -155,24 +180,68 @@ describe('範囲（C-04）の計算', () => {
       rrule: null,
     });
     expect(occurrenceEvent(master, [], '2026-10-16T07:00')).toBeNull();
-    if (!synth) throw new Error('回がない');
-    const input = draftToInput(eventToDraft(synth));
-    expect(changesStart(synth, input)).toBe(false);
-    expect(changesStart(synth, { ...input, startAt: '2026-10-15T08:00:00+09:00' })).toBe(true);
   });
 
-  it('送る変更: この回だけは rrule を外す。これ以降・すべては繰り返しが同じなら送らない', () => {
-    const input = {
-      title: 'x',
-      allDay: false,
-      startAt: '2026-10-15T07:00:00+09:00',
-      rrule: 'FREQ=WEEKLY;BYDAY=TH',
+  it('送る変更は回の今の中身との差分だけ: 例外で動かした回から件名だけ直しても日時を送らない（レビュー P3-web-03・P3-core-02）', () => {
+    const moved = ev({
+      ...exception,
+      startAt: '2026-10-22T09:00:00+09:00',
+      endAt: '2026-10-22T10:00:00+09:00',
+    });
+    // 書く画面の下書きは、回の中身に親の繰り返しを付けたもの
+    const whole = {
+      ...draftToInput(eventToDraft(moved)),
+      rrule: master.rrule,
+      title: 'ヨガ（新）',
     };
-    expect('rrule' in changesForScope(master, input, 'this')).toBe(false);
-    expect('rrule' in changesForScope(master, input, 'all')).toBe(false);
-    expect(
-      changesForScope(master, { ...input, rrule: 'FREQ=WEEKLY;BYDAY=FR' }, 'following').rrule,
-    ).toBe('FREQ=WEEKLY;BYDAY=FR');
+    for (const scope of ['this', 'following', 'all'] as const) {
+      expect(occurrenceChanges(master, moved, whole, scope)).toEqual({
+        ok: true,
+        changes: { title: 'ヨガ（新）' },
+      });
+    }
+    // 時刻を変えたら入る
+    const later = {
+      ...whole,
+      startAt: '2026-10-22T10:00:00+09:00',
+      endAt: '2026-10-22T11:00:00+09:00',
+    };
+    const r = occurrenceChanges(master, moved, later, 'all');
+    expect(r.ok && r.changes.startAt).toBe('2026-10-22T10:00:00+09:00');
+  });
+
+  it('繰り返しは、書き方が違っても同じ規則なら送らない。この回だけでは送らない（レビュー P3-core-05）', () => {
+    const base = occurrenceEvent(master, [], '2026-10-15T07:00');
+    if (!base) throw new Error('回がない');
+    const input = {
+      title: 'ヨガ',
+      allDay: false,
+      startAt: base.startAt ?? null,
+      rrule: 'FREQ=WEEKLY',
+    };
+    const same = occurrenceChanges(master, base, input, 'all');
+    expect(same.ok && 'rrule' in same.changes).toBe(false);
+    const fr = occurrenceChanges(
+      master,
+      base,
+      { ...input, rrule: 'FREQ=WEEKLY;BYDAY=FR' },
+      'following',
+    );
+    expect(fr.ok && fr.changes.rrule).toBe('FREQ=WEEKLY;BYDAY=FR');
+    const only = occurrenceChanges(
+      master,
+      base,
+      { ...input, rrule: 'FREQ=WEEKLY;BYDAY=FR' },
+      'this',
+    );
+    expect(only.ok && 'rrule' in only.changes).toBe(false);
+  });
+
+  it('「この予定だけ」を選べない理由: 公開・非公開、繰り返しの変更（レビュー P3-web-04・P3-web-11）', () => {
+    expect(thisScopeBlock(master, { title: 'x' })).toBeNull();
+    expect(thisScopeBlock(master, { visibility: 'private' })).toContain('公開・非公開');
+    expect(thisScopeBlock(master, { rrule: 'FREQ=WEEKLY;BYDAY=FR' })).toContain('繰り返し');
+    expect(thisScopeBlock(master, { rrule: 'FREQ=WEEKLY;BYDAY=TH' })).toBeNull();
   });
 });
 
@@ -375,7 +444,160 @@ describe('送信待ちの繰り返し（§11・§12）', () => {
     expect(bodies[1]).toEqual([
       'PATCH',
       `/api/events/${s.id}`,
-      { scope: 'following', recurrenceId: '2026-10-15T07:30', changes: { title: '可燃ごみ' } },
+      {
+        scope: 'following',
+        recurrenceId: '2026-10-15T07:30',
+        // 新しいシリーズの ID は手元で振る（§24 D33。レビュー P3-spec-tests-08）
+        exceptionId: expect.any(String),
+        changes: { title: '可燃ごみ' },
+      },
     ]);
+    // 保存したあとの回は、新しいシリーズの同じ回
+    expect(u.ok && u.target).toEqual({
+      eventId: (bodies[1]?.[2] as { exceptionId?: string } | undefined)?.exceptionId,
+      recurrenceId: '2026-10-15T07:30',
+    });
+  });
+});
+
+describe('繰り返しの回の送信待ち（Phase 3 のレビュー。§24 D34）', () => {
+  const plain = ({ sync: _s, ...e }: LocalEvent): EventDTO => e;
+  const series = () =>
+    ev({
+      title: '燃えるゴミ',
+      memberIds: [M.papa],
+      ownerId: M.papa,
+      version: 3,
+      startAt: '2026-10-05T07:30:00+09:00',
+      endAt: '2026-10-05T08:00:00+09:00',
+      rrule: 'FREQ=WEEKLY;BYDAY=MO,TH',
+    });
+
+  it('この回だけの送信待ちが 409: 競合の画面に出さず、送信待ちと手元の例外行を捨て、家族の版にして全件を取り直す（P3-web-01）', async () => {
+    const s = series();
+    await db.events.put(s);
+    const theirs = { ...plain(s), version: 7, title: '燃えるゴミ（家族が変えた）' };
+    const { store, realSync } = storeWith((c) => {
+      if (c.path === '/api/me') return { status: 200, body: me };
+      if (c.method === 'PATCH') {
+        return {
+          status: 409,
+          body: {
+            type: 'about:blank',
+            title: '競合',
+            status: 409,
+            code: 'conflict',
+            event: theirs,
+          },
+        };
+      }
+      return 'network';
+    });
+    const toasts: string[] = [];
+    store.onToast((t) => toasts.push(t.message));
+    const r = await store.updateOccurrence(s.id, '2026-10-08T07:30', 'this', { title: '祝日' });
+    expect(r.ok).toBe(true);
+    const exId = (await db.events.where('parentId').equals(s.id).toArray())[0]?.id;
+    expect(exId).toBeDefined();
+    await realSync();
+    expect(await db.outbox.count()).toBe(0);
+    expect(await db.conflicts.count()).toBe(0);
+    expect(await db.events.get(exId as string)).toBeUndefined();
+    expect((await db.events.get(s.id))?.title).toBe('燃えるゴミ（家族が変えた）');
+    expect(await db.getMeta('cursor')).toBe(0);
+    expect(toasts.some((t) => t.includes('家族が先に'))).toBe(true);
+  });
+
+  it('回がない 404（occurrence_not_found）では親を消さない（P3-web-08）', async () => {
+    const s = series();
+    await db.events.put(s);
+    const { store, realSync } = storeWith((c) => {
+      if (c.path === '/api/me') return { status: 200, body: me };
+      if (c.method === 'PATCH') {
+        return {
+          status: 404,
+          body: {
+            type: 'about:blank',
+            title: 'この回は見つかりません',
+            status: 404,
+            code: 'occurrence_not_found',
+          },
+        };
+      }
+      return 'network';
+    });
+    await store.updateOccurrence(s.id, '2026-10-08T07:30', 'this', { title: '祝日' });
+    await realSync();
+    expect(await db.events.get(s.id)).toBeDefined();
+    expect(await db.events.where('parentId').equals(s.id).count()).toBe(0);
+    expect(await db.outbox.count()).toBe(0);
+  });
+
+  it('新しく作った「この回だけ変更」の元に戻す: 送る前なら送信待ちと例外行を消す、送ったあとなら revert を送る（P3-web-05）', async () => {
+    const s = series();
+    await db.events.put(s);
+    const { store } = storeWith(() => 'network');
+    const r = await store.updateOccurrence(s.id, '2026-10-08T07:30', 'this', { title: '祝日' });
+    await r.undo?.();
+    expect(await db.outbox.count()).toBe(0);
+    expect(await db.events.where('parentId').equals(s.id).count()).toBe(0);
+
+    // 送ったあと（attempts が付いた）
+    const r2 = await store.updateOccurrence(s.id, '2026-10-08T07:30', 'this', { title: '祝日' });
+    const item = (await db.outbox.toArray())[0];
+    await db.outbox.update(item?.id as string, { attempts: 1 });
+    await r2.undo?.();
+    const bodies = (await db.outbox.toArray()).map((o) => o.body);
+    expect(bodies[1]).toEqual({
+      scope: 'this',
+      recurrenceId: '2026-10-08T07:30',
+      revert: true,
+      changes: {},
+    });
+    expect(await db.events.where('parentId').equals(s.id).count()).toBe(0);
+  });
+
+  it('「すべて」: 件名だけなら元に戻せる（逆向きの変更を積む）。日時を変えたら元に戻せない（P3-web-07）', async () => {
+    const s = series();
+    await db.events.put(s);
+    const { store } = storeWith(() => 'network');
+    const r = await store.updateOccurrence(s.id, '2026-10-08T07:30', 'all', { title: '資源ゴミ' });
+    expect(r.ok && r.undo).toBeTypeOf('function');
+    await r.undo?.();
+    expect((await db.outbox.toArray()).map((o) => o.body)).toEqual([
+      { scope: 'all', recurrenceId: '2026-10-08T07:30', changes: { title: '資源ゴミ' } },
+      { scope: 'all', recurrenceId: '2026-10-08T07:30', changes: { title: '燃えるゴミ' } },
+    ]);
+    const moved = await store.updateOccurrence(s.id, '2026-10-08T07:30', 'all', {
+      startAt: '2026-10-08T08:00:00+09:00',
+      endAt: '2026-10-08T08:30:00+09:00',
+    });
+    expect(moved.ok && moved.undo).toBeUndefined();
+    expect(moved.ok && moved.target).toEqual({ eventId: s.id, recurrenceId: '2026-10-08T08:00' });
+  });
+
+  it('「この予定だけ」で公開・非公開や繰り返しは変えられない（保存しない。P3-web-04・11）', async () => {
+    const s = series();
+    await db.events.put(s);
+    const { store } = storeWith(() => 'network');
+    const a = await store.updateOccurrence(s.id, '2026-10-08T07:30', 'this', {
+      visibility: 'private',
+    });
+    expect(a.ok).toBe(false);
+    const b = await store.updateOccurrence(s.id, '2026-10-08T07:30', 'this', {
+      rrule: 'FREQ=DAILY',
+    });
+    expect(b.ok).toBe(false);
+    expect(await db.outbox.count()).toBe(0);
+  });
+
+  it('最初の回の「これ以降を削除」はシリーズごとゴミ箱（元に戻せる。P3-web-12）', async () => {
+    const s = series();
+    await db.events.put(s);
+    const { store } = storeWith(() => 'network');
+    const d = await store.deleteOccurrence(s.id, '2026-10-05T07:30', 'following');
+    expect(d.ok).toBe(true);
+    expect(d.undo).toBeTypeOf('function');
+    expect((await db.outbox.toArray()).map((o) => o.path)).toEqual([`/api/events/${s.id}`]);
   });
 });

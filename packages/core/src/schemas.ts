@@ -158,11 +158,17 @@ export const eventPatchSchema = z
   .object({
     scope: z.enum(EDIT_SCOPES).default('all'),
     recurrenceId: recurrenceIdSchema.nullable().optional(),
-    /** 「この回だけ変更」で作る例外行の ID（クライアントが振る。§11） */
+    /** 「この回だけ変更」で作る例外行の ID・「これ以降」の新しいシリーズの ID（クライアントが振る。§11） */
     exceptionId: uuidSchema.optional(),
+    /** scope=this で「この回だけ変更」を元に戻す（例外行を消す。changes は空。§24 D34） */
+    revert: z.literal(true).optional(),
     changes: eventChangesSchema,
   })
-  .strict();
+  .strict()
+  .refine((p) => !p.revert || (p.scope === 'this' && Object.keys(p.changes).length === 0), {
+    message: '元に戻すのは「この回だけ」の変更だけです',
+    path: ['revert'],
+  });
 export type EventPatchInput = z.input<typeof eventPatchSchema>;
 
 export const remindersPutSchema = z

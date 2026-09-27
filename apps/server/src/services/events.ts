@@ -23,6 +23,7 @@ import {
   deleteFollowing,
   deleteThisOccurrence,
   resetIfStartsChange,
+  revertThisOccurrence,
   type Scope,
   updateFollowing,
   updateThisOccurrence,
@@ -42,6 +43,8 @@ export interface EventPatch {
   scope: Scope;
   recurrenceId?: string | null | undefined;
   exceptionId?: string | undefined;
+  /** scope=this で、その回の「この回だけ変更」を元に戻す（例外行を消す。§24 D34） */
+  revert?: true | undefined;
   changes: EventChanges;
 }
 
@@ -183,6 +186,9 @@ export function updateEvent(
   checkVersion(current, ifMatch, me);
   const ordered = (ids: string[]) => orderMemberIds(db, ids);
   const check = (ids: string[], previous: string[]) => checkMembers(db, ids, previous);
+  if (current.rrule !== null && patch.scope === 'this' && patch.revert) {
+    return revertThisOccurrence(db, clock, me, current, requireRecurrenceId(patch.recurrenceId));
+  }
   if (current.rrule !== null && patch.scope === 'this') {
     const rid = requireRecurrenceId(patch.recurrenceId);
     return updateThisOccurrence(
@@ -227,7 +233,6 @@ export function updateEvent(
   // 繰り返しの回の開始が変わるなら、例外・取り消しをリセットする（§11。件数を返す）
   const { next, discarded } = resetIfStartsChange(
     db,
-    me,
     current,
     { ...current, ...f, version: current.version + 1, updatedBy: me.id, updatedAt: now },
     now,

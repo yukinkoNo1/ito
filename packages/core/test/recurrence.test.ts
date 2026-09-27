@@ -61,14 +61,21 @@ describe('RRULE の検証（§11 のサブセット）', () => {
     ['FREQ=DAILY;FREQ=WEEKLY', '正しくありません'],
     ['FREQ=DAILY;X-FOO=1', 'X-FOO'],
     ['INTERVAL=2', '頻度'],
+    // 毎日で曜日を絞って間隔が 7 の倍数（開始の曜日しか来ず、ほかの曜日だと回が 1 つも出ない。レビュー P3-core-04）
+    ['FREQ=DAILY;INTERVAL=7;BYDAY=TU', '毎週'],
+    ['FREQ=DAILY;INTERVAL=14;BYDAY=MO,TU', '毎週'],
   ])('%s は拒否（%s）', (input, message) => {
     const r = parseRrule(input);
     expect(r.ok).toBe(false);
     if (!r.ok) expect(r.message).toContain(message);
   });
 
-  it('決まった順にして保存する', () => {
-    expect(normalizeRrule('rrule:byday=th,mo;freq=weekly')).toBe('FREQ=WEEKLY;BYDAY=TH,MO');
+  it('決まった順にして保存する（項目の順と、値の並び: 曜日は月曜から・数は小さい順。レビュー P3-core-05）', () => {
+    expect(normalizeRrule('rrule:byday=th,mo;freq=weekly')).toBe('FREQ=WEEKLY;BYDAY=MO,TH');
+    expect(normalizeRrule('FREQ=WEEKLY;BYDAY=SU,SA,MO')).toBe('FREQ=WEEKLY;BYDAY=MO,SA,SU');
+    expect(normalizeRrule('FREQ=MONTHLY;BYDAY=4WE,2WE')).toBe('FREQ=MONTHLY;BYDAY=2WE,4WE');
+    expect(normalizeRrule('FREQ=MONTHLY;BYMONTHDAY=15,1')).toBe('FREQ=MONTHLY;BYMONTHDAY=1,15');
+    expect(normalizeRrule('FREQ=DAILY;INTERVAL=7;BYDAY=MO')).toBeNull();
     expect(normalizeRrule('FREQ=MONTHLY;COUNT=5;BYDAY=2WE,4WE')).toBe(
       'FREQ=MONTHLY;BYDAY=2WE,4WE;COUNT=5',
     );
@@ -219,16 +226,54 @@ describe('分割・日時の差分', () => {
     expect(countBefore(r, dt, { date: '2026-10-15', time: '07:00' })).toBe(2);
   });
 
-  it('「すべて」で日時を 1 日後ろにしたら、曜日・日もずらす', () => {
-    expect(shiftRule(rule('FREQ=WEEKLY;BYDAY=MO,TH'), 1).byDay.map((d) => d.weekday)).toEqual([
-      2, 5,
+  it('「すべて」で日付を動かしたら、曜日・日も動かした先に合わせる', () => {
+    const days = (r: RuleParts | null) => r?.byDay.map((d) => [d.nth, d.weekday]);
+    // 毎週: 同じ日数だけ曜日をずらす
+    expect(days(shiftRule(rule('FREQ=WEEKLY;BYDAY=MO,TH'), '2026-10-05', '2026-10-06'))).toEqual([
+      [null, 2],
+      [null, 5],
     ]);
-    expect(shiftRule(rule('FREQ=WEEKLY;BYDAY=SA'), 1).byDay.map((d) => d.weekday)).toEqual([0]);
-    expect(shiftRule(rule('FREQ=MONTHLY;BYMONTHDAY=15'), -2).byMonthDay).toEqual([13]);
-    expect(shiftRule(rule('FREQ=MONTHLY;BYDAY=2WE,4WE'), 1).byDay).toEqual([
-      { weekday: 4, nth: 2 },
-      { weekday: 4, nth: 4 },
+    expect(days(shiftRule(rule('FREQ=WEEKLY;BYDAY=SA'), '2026-10-03', '2026-10-04'))).toEqual([
+      [null, 0],
     ]);
+    // 毎月の日付: 動かした先の日（レビュー P3-core-03）
+    expect(
+      shiftRule(rule('FREQ=MONTHLY;BYMONTHDAY=15'), '2026-10-15', '2026-10-13')?.byMonthDay,
+    ).toEqual([13]);
+    // 月末の規則: 先も月末なら月末のまま、そうでなければその日
+    expect(
+      shiftRule(rule('FREQ=MONTHLY;BYMONTHDAY=30'), '2026-11-30', '2026-11-30')?.byMonthDay,
+    ).toEqual([30]);
+    expect(
+      shiftRule(rule('FREQ=MONTHLY;BYMONTHDAY=-1'), '2026-10-31', '2026-10-30')?.byMonthDay,
+    ).toEqual([30]);
+    expect(
+      shiftRule(rule('FREQ=MONTHLY;BYMONTHDAY=28'), '2026-02-28', '2026-02-27')?.byMonthDay,
+    ).toEqual([27]);
+    expect(
+      shiftRule(rule('FREQ=MONTHLY;BYMONTHDAY=27'), '2026-02-27', '2026-02-28')?.byMonthDay,
+    ).toEqual([28]);
+    expect(
+      shiftRule(rule('FREQ=MONTHLY;BYMONTHDAY=-1'), '2026-02-28', '2026-02-28')?.byMonthDay,
+    ).toEqual([-1]);
+    // 毎月の規則で月をまたぐと、どの月の回をどこへ動かしたのか決まらない（null。保存しない）
+    expect(shiftRule(rule('FREQ=MONTHLY;BYMONTHDAY=30'), '2026-10-30', '2026-11-01')).toBeNull();
+    expect(shiftRule(rule('FREQ=MONTHLY;BYMONTHDAY=-1'), '2026-10-31', '2026-11-30')).toBeNull();
+    // 第 n 曜日: 動かした先の第 n と曜日（2026-10-14 は第2水曜、10-15 は第3木曜）
+    expect(days(shiftRule(rule('FREQ=MONTHLY;BYDAY=2WE'), '2026-10-14', '2026-10-15'))).toEqual([
+      [3, 4],
+    ]);
+    expect(days(shiftRule(rule('FREQ=MONTHLY;BYDAY=-1FR'), '2026-10-30', '2026-10-29'))).toEqual([
+      [-1, 4],
+    ]);
+    // 複数の第 n: 第 n が変わらなければ曜日だけ、変わるなら決められない（null）
+    expect(days(shiftRule(rule('FREQ=MONTHLY;BYDAY=2WE,4WE'), '2026-10-14', '2026-10-13'))).toEqual(
+      [
+        [2, 2],
+        [4, 2],
+      ],
+    );
+    expect(shiftRule(rule('FREQ=MONTHLY;BYDAY=2WE,4WE'), '2026-10-14', '2026-10-15')).toBeNull();
   });
 
   it('29〜31 日を選んだら「月末にしますか？」（§11）', () => {

@@ -1,5 +1,5 @@
 # 進み具合
-今: Phase 3（繰り返し） / 次にやること: レビュー → 指摘を直す → phase-3 → Phase 4（通知）
+今: Phase 4（通知） / 次にやること: 退避した Phase 4 の作業中の変更（git stash「phase4-wip」。購読・スケジューラ・SW の push・設定の画面）を戻す → マイグレーションの番号を 0004 に → 受け入れ基準 → レビュー → phase-4
 
 ## ステップ
 | ステップ | 状態（未着手・作業中・完了） | タグ | メモ |
@@ -8,7 +8,7 @@
 | Phase 1 予定の中核と表示用フィード | 完了 | phase-1 | レビューの指摘（非公開→公開の履歴の漏えい、通知設定の部分更新、送信待ちの畳み込み、確認スクリプトの後始末）を直した |
 | Phase 2 PWA とローカルファースト | 完了 | phase-2 | レビューの指摘（ログアウトで SW の登録が残る、SW を通る遷移のテスト、競合中の編集で自分の変更が消える、送らずに戻した変更のあとの取得、429 の待ち、426 の更新、時計の巻き戻し ほか）を直した |
 | Phase 6 UI 統合 | 完了 | phase-6 | Phase 2 の次に行った（§24 D15）。レビューの指摘（シートのスワイプ、テーマの監視の漏れ、自分の非公開の候補、書く画面の日時の範囲、トースト・案内、履歴・ゴミ箱の状態、人の札が 7 個以上、日付をまたぐ行、検査の範囲 ほか）を直した |
-| Phase 3 繰り返し | 作業中 | phase-3 | |
+| Phase 3 繰り返し | 完了 | phase-3 | レビューの指摘（件名だけ直してもシリーズが動く、C-04 の件数とサーバーの食い違い、リセットした例外の復活、毎月の規則のずれ、回が出ない規則、pnpm dev が rrule の読み込みで起動しない、回の送信待ちの 409 ほか）を直した（§24 D34） |
 | Phase 4 通知 | 未着手 | phase-4 | |
 | Phase 5 一言入力 | 未着手 | phase-5 | |
 | Phase 7 仕上げ | 未着手 | phase-7 | |
@@ -86,7 +86,8 @@
 | Phase 3 | 入力制限（HOURLY 以下の拒否、INTERVAL・COUNT の上限、展開の打ち切り） | core「RRULE の検証」「1 回の展開は 2,000 回で打ち切る」「回が出ない規則（毎年 2/31）でも、すぐ終わる」、server「… は 422」 | OK |
 | Phase 3 | RecurrenceEndVM（なし／◯回／◯日まで）⇔ COUNT / UNTIL | core「UI の形 ⇔ RRULE」、web「書く画面の繰り返し」 | OK |
 | Phase 3 | 画面（書く画面の繰り返し・C-04・オフラインの制限） | E2E phase3.spec.ts（書く画面で毎週・10 回 → この予定だけの時刻 → この予定だけ削除 → これ以降すべて（消える 2 件を C-04 に表示）→ すべて）、「オフラインでは…選べない」、web phase3.test.ts（送信待ち・範囲の計算・月末の問い） | OK |
-| Phase 3 | `pnpm check`・`pnpm test:e2e`・`docker compose build` | 下の最終の確認で | OK |
+| Phase 3 | レビューの指摘（§24 D34） | core series.test.ts・recurrence.test.ts、server recurrence.test.ts「Phase 3 のレビューの指摘」・esm-load.test.ts（本物の Node で @ito/core・アプリ・CLI を読み込む）、web phase3.test.ts「範囲（C-04）の計算」「繰り返しの回の送信待ち（Phase 3 のレビュー）」、E2E phase3（件名だけの「これ以降」は元の回の 7:30 から） | OK |
+| Phase 3 | `pnpm check`・`pnpm test:e2e`・`docker compose build`・`pnpm dev` | `pnpm check`（Biome＋tsc＋Vitest 385 件）、`pnpm test:e2e`（41 件）、`docker compose build`、`node scripts/check-dev.mjs`（/healthz・/・/api/me が 200） | OK（すべて EXIT=0） |
 | Phase 6 | `pnpm check`・`pnpm test:e2e`・`pnpm build`・`docker compose build` | `pnpm check`（261 件）、`pnpm test:e2e`（39 件）、`pnpm build`、`docker compose build` | OK（すべて EXIT=0） |
 
 ## 決めたこと（SPEC §24 に書いたもの）
@@ -109,6 +110,7 @@
 - D31: ギャラリーは開発と E2E 用のビルドだけ。見本（mock-data.ts）を E2E と共有し、同じデータ・固定の時計でスクリーンショットを比べる
 - D32: Phase 6 のレビューで決めた画面の細則（見出しの年、まとめの④はボタンだけ、無効の家族だけの回は出さない、スワイプはつまみ・見出しから、テーマの追従は 1 か所、書く画面のほかの日・時刻、履歴・ゴミ箱の状態 ほか）
 - D33: 繰り返しの細則（例外行の key、If-Match は親、exceptionId、RRULE の制限と正規化、消える件数、この回だけ削除の取り消し、reminder_prefs の複製、C-04 のオフライン）
+- D34: Phase 3 のレビューで決めた繰り返しの細則（差分だけを送る、消える件数の共通の計算、破棄した例外行は消す、毎月の規則の移動、RRULE の並びと比べ方、この回だけ変更の元に戻す、回の送信待ちの 409・404、「この予定だけ」の制限、保存したあとの回へ移る、rrule の ESM）
 
 ## 後で足すテスト
 - 非公開の漏えい（まだない経路）: 書き出し（JSON・ICS。Phase 7）、Push の文面（Phase 4）、朝のまとめ・前夜の予告（Phase 4）、一言入力の重なりの警告（Phase 5。端末内で作るので他人の非公開は「予定あり」になることを確かめる）、検索（Phase 7。端末内の DB を検索する）

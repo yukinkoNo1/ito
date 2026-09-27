@@ -490,3 +490,285 @@ describe('この回だけ削除の取り消し（§6.1 の「元に戻す」）'
     expect((await byId('papa', EX))?.title).toBe('変更');
   });
 });
+
+describe('Phase 3 のレビューの指摘（§24 D34）', () => {
+  /** 毎週 月・木 7:30、10/8（木）の回を例外で 9:00 に動かし、10/12 を取り消したシリーズ */
+  async function movedSeries() {
+    const { event: s } = await createEvent(
+      ctx,
+      'papa',
+      timed('2026-10-05', '07:30', '08:00', {
+        title: '燃えるゴミ',
+        rrule: 'FREQ=WEEKLY;BYDAY=MO,TH',
+        memberIds: [IDS.papa],
+      }),
+    );
+    const res = await patch('papa', s.id, s.version, {
+      scope: 'this',
+      recurrenceId: '2026-10-08T07:30',
+      exceptionId: EX,
+      changes: { startAt: '2026-10-08T09:00:00+09:00', endAt: '2026-10-08T09:30:00+09:00' },
+    });
+    expect(res.status).toBe(200);
+    expect(
+      (await del('papa', s.id, s.version + 1, '?scope=this&recurrenceId=2026-10-12T07:30')).status,
+    ).toBe(200);
+    return { ...s, version: s.version + 2 };
+  }
+
+  /** 例外の回をそのまま（全部の項目）＋件名だけ変えた本文。PWA の古い版が送る形（P3-server-01） */
+  const wholeBody = {
+    title: '燃えるゴミ（新）',
+    allDay: false,
+    startAt: '2026-10-08T09:00:00+09:00',
+    endAt: '2026-10-08T09:30:00+09:00',
+    memberIds: [IDS.papa],
+    forEveryone: false,
+  };
+
+  it('例外で動かした回から「すべて」で件名だけ直しても、シリーズは動かず、例外・取り消しも残る', async () => {
+    const s = await movedSeries();
+    const res = await patch('papa', s.id, s.version, {
+      scope: 'all',
+      recurrenceId: '2026-10-08T07:30',
+      changes: wholeBody,
+    });
+    expect(res.status).toBe(200);
+    expect(((await res.json()) as { discarded: unknown }).discarded).toEqual({
+      exceptions: 0,
+      exdates: 0,
+    });
+    expect(await byId('papa', s.id)).toMatchObject({
+      title: '燃えるゴミ（新）',
+      startAt: '2026-10-05T07:30:00+09:00',
+      rrule: 'FREQ=WEEKLY;BYDAY=MO,TH',
+      exdates: ['2026-10-12T07:30'],
+    });
+    expect((await byId('papa', EX))?.startAt).toBe('2026-10-08T09:00:00+09:00');
+  });
+
+  it('例外で動かした回から「これ以降」で件名だけ直しても、新しいシリーズは元の回の時刻・曜日で始まる', async () => {
+    const s = await movedSeries();
+    const res = await patch('papa', s.id, s.version, {
+      scope: 'following',
+      recurrenceId: '2026-10-08T07:30',
+      exceptionId: NEW,
+      changes: wholeBody,
+    });
+    expect(res.status).toBe(200);
+    expect(await byId('papa', NEW)).toMatchObject({
+      title: '燃えるゴミ（新）',
+      startAt: '2026-10-08T07:30:00+09:00',
+      rrule: 'FREQ=WEEKLY;BYDAY=MO,TH',
+    });
+    // 履歴の新しいシリーズの行に、何を変えたかが入る（P3-server-08）
+    const act = await send(ctx, 'GET', '/api/activity', { headers: as('papa') });
+    const items = ((await act.json()) as { items: { eventId: string; detail: string | null }[] })
+      .items;
+    expect(items.find((i) => i.eventId === NEW)?.detail).toContain(
+      '件名「燃えるゴミ」→「燃えるゴミ（新）」',
+    );
+  });
+
+  it('「すべて」で終わりの回数だけ変えたら、新しい規則でも回として残る例外・取り消しは残る（P3-server-03）', async () => {
+    const s = await movedSeries();
+    const res = await patch('papa', s.id, s.version, {
+      scope: 'all',
+      recurrenceId: '2026-10-05T07:30',
+      changes: { rrule: 'FREQ=WEEKLY;BYDAY=MO,TH;COUNT=6' },
+    });
+    expect(res.status).toBe(200);
+    expect(((await res.json()) as { discarded: unknown }).discarded).toEqual({
+      exceptions: 0,
+      exdates: 0,
+    });
+    expect((await byId('papa', s.id))?.exdates).toEqual(['2026-10-12T07:30']);
+    expect(await byId('papa', EX)).toBeDefined();
+    // 回数を 1 にすると 10/8・10/12 は回でなくなり、消える
+    const res2 = await patch('papa', s.id, s.version + 1, {
+      scope: 'all',
+      recurrenceId: '2026-10-05T07:30',
+      changes: { rrule: 'FREQ=WEEKLY;BYDAY=MO,TH;COUNT=1' },
+    });
+    expect(((await res2.json()) as { discarded: unknown }).discarded).toEqual({
+      exceptions: 1,
+      exdates: 1,
+    });
+    expect(await byId('papa', EX)).toBeUndefined();
+  });
+
+  it('リセットで消した例外は、あとの「この回だけ削除」の取り消しで戻らない（P3-server-04）', async () => {
+    const s = await movedSeries();
+    // 開始の時刻を変えて、例外・取り消しをリセット
+    const res = await patch('papa', s.id, s.version, {
+      scope: 'all',
+      recurrenceId: '2026-10-05T07:30',
+      changes: { startAt: '2026-10-05T07:00:00+09:00', endAt: '2026-10-05T07:30:00+09:00' },
+    });
+    expect(((await res.json()) as { discarded: unknown }).discarded).toEqual({
+      exceptions: 1,
+      exdates: 1,
+    });
+    // 10/8 7:00 の回を「この回だけ削除」→ 取り消し
+    expect(
+      (await del('papa', s.id, s.version + 1, '?scope=this&recurrenceId=2026-10-08T07:00')).status,
+    ).toBe(200);
+    const restored = await send(
+      ctx,
+      'POST',
+      `/api/events/${s.id}/restore?recurrenceId=2026-10-08T07:00`,
+      { headers: { ...as('papa'), 'idempotency-key': 'restore-after-reset' } },
+    );
+    expect(restored.status).toBe(200);
+    expect(await byId('papa', EX)).toBeUndefined();
+    const occ = await occurrences('papa', '2026-10-08', '2026-10-09');
+    expect(occ.map((o) => [o.start, o.title])).toEqual([['2026-10-08T07:00', '燃えるゴミ']]);
+  });
+
+  it('これ以降を削除: シリーズの回でない recurrenceId は 404 で、シリーズはゴミ箱に入らない（P3-server-02）', async () => {
+    const s = await movedSeries();
+    for (const rid of ['2000-01-05T07:30', '2026-10-06T07:30', '2026-10-08']) {
+      const res = await del('papa', s.id, s.version, `?scope=following&recurrenceId=${rid}`);
+      expect(res.status).toBe(404);
+    }
+    expect((await byId('papa', s.id))?.id).toBe(s.id);
+    const { event: allDaySeries } = await createEvent(
+      ctx,
+      'papa',
+      allDay('2026-10-01', '2026-10-01', { rrule: 'FREQ=DAILY;COUNT=5', memberIds: [IDS.papa] }),
+    );
+    const res = await del(
+      'papa',
+      allDaySeries.id,
+      allDaySeries.version,
+      '?scope=following&recurrenceId=2026-10-03T00:00',
+    );
+    expect(res.status).toBe(404);
+  });
+
+  it('毎月の規則で月をまたいで「すべて」の日付を動かすと 422（回が決まらない。P3-core-03）', async () => {
+    const { event: s } = await createEvent(
+      ctx,
+      'papa',
+      timed('2026-09-30', '07:30', null, {
+        rrule: 'FREQ=MONTHLY;BYMONTHDAY=30',
+        memberIds: [IDS.papa],
+      }),
+    );
+    const res = await patch('papa', s.id, s.version, {
+      scope: 'all',
+      recurrenceId: '2026-10-30T07:30',
+      changes: { startAt: '2026-11-01T07:30:00+09:00' },
+    });
+    expect(res.status).toBe(422);
+  });
+
+  it('毎日で曜日を絞り、間隔が 7 の倍数の規則は 422（P3-core-04）', async () => {
+    const { res } = await createEvent(
+      ctx,
+      'papa',
+      timed('2026-09-28', '07:30', null, { rrule: 'FREQ=DAILY;INTERVAL=7;BYDAY=TU' }),
+    );
+    expect(res.status).toBe(422);
+  });
+
+  it('「この回だけ変更」を元に戻す（revert）: 例外行を消してシリーズどおりに戻す', async () => {
+    const s = await movedSeries();
+    const bad = await patch('papa', s.id, s.version, {
+      scope: 'this',
+      recurrenceId: '2026-10-08T07:30',
+      revert: true,
+      changes: { title: 'x' },
+    });
+    expect(bad.status).toBe(422);
+    const res = await patch('papa', s.id, s.version, {
+      scope: 'this',
+      recurrenceId: '2026-10-08T07:30',
+      revert: true,
+      changes: {},
+    });
+    expect(res.status).toBe(200);
+    expect(await byId('papa', EX)).toBeUndefined();
+    expect((await byId('papa', s.id))?.version).toBe(s.version + 1);
+    const occ = await occurrences('papa', '2026-10-08', '2026-10-09');
+    expect(occ.map((o) => o.start)).toEqual(['2026-10-08T07:30']);
+  });
+
+  it('scope ごとの古い If-Match は 409（本文は投影した親）', async () => {
+    const s = await movedSeries();
+    const stale = s.version - 1;
+    for (const res of [
+      await patch('papa', s.id, stale, {
+        scope: 'following',
+        recurrenceId: '2026-10-15T07:30',
+        changes: { title: 'x' },
+      }),
+      await patch('papa', s.id, stale, {
+        scope: 'all',
+        recurrenceId: '2026-10-15T07:30',
+        changes: { title: 'x' },
+      }),
+      await del('papa', s.id, stale, '?scope=this&recurrenceId=2026-10-15T07:30'),
+      await del('papa', s.id, stale, '?scope=following&recurrenceId=2026-10-15T07:30'),
+    ]) {
+      expect(res.status).toBe(409);
+      const body = (await res.json()) as { event: { id: string; version: number } };
+      expect(body.event).toMatchObject({ id: s.id, version: s.version });
+    }
+  });
+
+  it('同じ Idempotency-Key の再送は同じ応答で、分割・取り消しを二重にしない', async () => {
+    const s = await movedSeries();
+    const body = {
+      scope: 'following',
+      recurrenceId: '2026-10-15T07:30',
+      exceptionId: NEW,
+      changes: { title: '後半' },
+    };
+    const sendFollowing = () =>
+      send(ctx, 'PATCH', `/api/events/${s.id}`, {
+        headers: {
+          ...as('papa'),
+          'if-match': String(s.version),
+          'idempotency-key': 'same-following',
+        },
+        body,
+      });
+    const a = await sendFollowing();
+    const b = await sendFollowing();
+    expect(a.status).toBe(200);
+    expect(await b.json()).toEqual(await a.json());
+    const { events } = await syncAs(ctx, 'papa');
+    expect(events.filter((e) => e.title === '後半')).toHaveLength(1);
+    const headers = {
+      ...as('papa'),
+      'if-match': String(s.version + 1),
+      'idempotency-key': 'same-del',
+    };
+    const path = `/api/events/${s.id}?scope=this&recurrenceId=2026-10-05T07:30`;
+    const d1 = await send(ctx, 'DELETE', path, { headers });
+    const d2 = await send(ctx, 'DELETE', path, { headers });
+    expect(d1.status).toBe(200);
+    expect(await d2.json()).toEqual(await d1.json());
+    expect((await byId('papa', s.id))?.version).toBe(s.version + 2);
+  });
+
+  it('PUT reminders: 4 件以上・範囲外は 422、他人の非公開は 403、例外行・ゴミ箱の予定は 404', async () => {
+    const s = await movedSeries();
+    const put = (who: 'papa' | 'mama', id: string, offsets: number[]) =>
+      send(ctx, 'PUT', `/api/events/${id}/reminders`, { headers: as(who), body: { offsets } });
+    expect((await put('papa', s.id, [0, -10, -30, -60])).status).toBe(422);
+    expect((await put('papa', s.id, [-10081])).status).toBe(422);
+    expect((await put('papa', s.id, [1441])).status).toBe(422);
+    expect((await put('papa', EX, [0])).status).toBe(404);
+    const { event: priv } = await createEvent(
+      ctx,
+      'mama',
+      timed('2026-10-05', '10:00', null, { visibility: 'private' }),
+    );
+    expect((await put('papa', priv.id, [0])).status).toBe(403);
+    const { event: gone } = await createEvent(ctx, 'papa', timed('2026-10-06', '10:00', null));
+    expect((await del('papa', gone.id, gone.version)).status).toBe(200);
+    expect((await put('papa', gone.id, [0])).status).toBe(404);
+  });
+});

@@ -12,11 +12,11 @@ import { applyDraftPatch } from '../../viewmodels/composer';
 import { buildComposerVM, monthEndQuestion } from '../../viewmodels/composer-vm';
 import { draftToInput, emptyDraft, eventToDraft } from '../../viewmodels/detail';
 import {
-  changesForScope,
-  changesStart,
   lostCounts,
+  occurrenceChanges,
   occurrenceEvent,
   type Scope,
+  thisScopeBlock,
 } from '../../viewmodels/series';
 
 interface ComposerState {
@@ -143,10 +143,16 @@ export function ComposerContainer() {
   const saveScope = async (scope: Scope) => {
     if (!editId || !master || !seriesRid) return;
     setState((s) => (s ? { ...s, saving: true, error: null, askScope: false } : s));
-    const input = changesForScope(master, draftToInput(state.draft), scope);
-    const r = await store.updateOccurrence(editId, seriesRid, scope, input);
+    // 送るのは回の今の中身との差分だけ（日時は変えたときだけ。store が取る。§24 D34）
+    const r = await store.updateOccurrence(editId, seriesRid, scope, draftToInput(state.draft));
     if (!r.ok) return fail(r.errors.map((e) => e.message).join('。'));
-    nav.closeComposer();
+    // 下に詳細が開いていて、保存で回が変わったら（日時を動かした・「これ以降」）、詳細をその回に移す
+    const t = r.target;
+    if (nav.detail && t && (t.eventId !== editId || t.recurrenceId !== seriesRid)) {
+      nav.replaceEvent(`${t.eventId}@${t.recurrenceId}`);
+    } else {
+      nav.closeComposer();
+    }
     toast.show({
       kind: 'undo',
       message: '保存しました',
@@ -187,13 +193,17 @@ export function ComposerContainer() {
     });
   };
 
+  const scopeInput = draftToInput(state.draft);
+  const scopeDiff =
+    master && state.base ? occurrenceChanges(master, state.base, scopeInput, 'all') : null;
   const lost =
-    master && seriesRid && state.base
+    master && seriesRid && scopeDiff
       ? lostCounts(master, overrides, seriesRid, {
           action: 'edit',
-          startsChange: changesStart(state.base, draftToInput(state.draft)),
+          changes: scopeDiff.ok ? scopeDiff.changes : {},
         })
       : { following: 0, all: 0 };
+  const thisBlocked = master ? thisScopeBlock(master, scopeInput) : null;
 
   return (
     <EventComposerSheet
@@ -223,6 +233,7 @@ export function ComposerContainer() {
       <RecurrenceScopeDialog
         action="edit"
         lost={lost}
+        thisBlocked={thisBlocked}
         offline={offline}
         onCancel={() => setState((s) => (s ? { ...s, askScope: false } : s))}
         onChoose={(scope) => void saveScope(scope)}

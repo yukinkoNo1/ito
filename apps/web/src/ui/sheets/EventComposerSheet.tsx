@@ -53,10 +53,8 @@ function recurrenceFor(
     case 'biweekly':
       return { kind: 'weekly', interval: 2, weekdays: [weekday] };
     case 'monthlyByDate':
-      return {
-        kind: 'monthlyByDate',
-        day: day === daysInMonth(year, month) && day >= 29 ? -1 : day,
-      };
+      // 29〜31 日はそのまま入れて「月末にしますか？」と聞く（§11・§24 D33。レビュー P3-web-10）
+      return { kind: 'monthlyByDate', day };
     case 'monthlyByWeekday': {
       const nth = Math.ceil(day / 7);
       return {

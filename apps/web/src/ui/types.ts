@@ -427,6 +427,7 @@ export interface RecurrenceScopeDialogProps {
   action: 'edit' | 'delete';
   offline: boolean; // true なら「これ以降」「すべて」を無効にして理由を表示
   lost: { following: number; all: number }; // その範囲を選ぶと消える、個別の変更・取り消しの件数（§11。§24 D33）
+  thisBlocked?: string | null; // 「この予定だけ」を選べない理由（公開・非公開・繰り返しの変更はシリーズ全体で。§24 D34）
   onChoose: (scope: 'this' | 'following' | 'all') => void;
   onCancel: () => void;
 }

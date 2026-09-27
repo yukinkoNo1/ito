@@ -1,21 +1,22 @@
 import {
   type Clock,
-  diffDays,
+  allScopeChanges as coreAllScopeChanges,
+  dropUnchangedTimes,
   type EventChanges,
   type EventRecord,
   fieldsFromChanges,
   formatMdW,
   formatRrule,
+  hasTimeChange,
   isAtOrAfter,
+  isOccurrenceOf,
   isSeriesOccurrence,
   occurrenceFields,
   parseRrule,
   projectEvent,
+  seriesLoss,
   shiftRule,
-  shiftSeries,
   splitSeries,
-  startsChange,
-  toIsoJst,
   toJstParts,
   uuidv7,
   wallOfRecurrenceId,
@@ -41,11 +42,7 @@ export interface Discarded {
   exdates: number;
 }
 
-const TIME_KEYS = ['allDay', 'startAt', 'endAt', 'startDate', 'endDate'] as const;
-
-function hasTimeChange(changes: EventChanges): boolean {
-  return TIME_KEYS.some((k) => changes[k] !== undefined);
-}
+const MOVE_ERROR = 'この日付には繰り返しを動かせません。繰り返しを選び直してください';
 
 function ridLabel(rid: string): string {
   const wall = wallOfRecurrenceId(rid);
@@ -63,7 +60,7 @@ export function currentOccurrence(
     null;
   if (exception) return { base: exception, exception };
   const times = isSeriesOccurrence(master, rid) ? occurrenceFields(master, rid) : null;
-  if (!times) throw new ApiError(404, 'not_found', 'この回は見つかりません');
+  if (!times) throw new ApiError(404, 'occurrence_not_found');
   return {
     base: {
       ...master,
@@ -77,27 +74,35 @@ export function currentOccurrence(
   };
 }
 
-/** rid 以降の例外行をゴミ箱へ（§11「以降の例外は破棄」。rid なしならすべて） */
+/**
+ * 例外行を破棄する（§11「以降の例外は破棄」・「すべて」のリセット）。ゴミ箱には入れずに消す
+ * （利用者が消したものではなく、C-04 で件数を見せて確かめたうえでシリーズの変更に置き換えたもの。
+ * ゴミ箱に残すと「この回だけ削除」の取り消しで戻ってしまう。§24 D34）。同期には changes で消えたことを伝える
+ */
 function discardExceptions(
   db: DbLike,
-  me: MemberRow,
   master: EventRecord,
-  from: string | null,
+  lost: (rid: string) => boolean,
   now: number,
 ): number {
   let n = 0;
   for (const ex of loadExceptions(db, master.id)) {
-    if (ex.deletedAt !== null || !ex.recurrenceId) continue;
-    if (from !== null && !isAtOrAfter(ex.recurrenceId, from)) continue;
-    updateRecord(
-      db,
-      { ...ex, version: ex.version + 1, deletedAt: now, deletedBy: me.id, updatedAt: now },
-      false,
-    );
+    if (ex.deletedAt !== null || !ex.recurrenceId || !lost(ex.recurrenceId)) continue;
+    db.delete(events).where(eq(events.id, ex.id)).run();
     recordChange(db, 'event', ex.id, now);
     n++;
   }
   return n;
+}
+
+/** rid がシリーズの回か、有効な例外行のある回か（なければ 404） */
+function requireOccurrence(db: DbLike, master: EventRecord, rid: string): void {
+  if (isSeriesOccurrence(master, rid)) return;
+  // 例外行で動かした回でも、元の回がシリーズにあればよい
+  const hasException = loadExceptions(db, master.id).some(
+    (e) => e.recurrenceId === rid && e.deletedAt === null,
+  );
+  if (!hasException) throw new ApiError(404, 'occurrence_not_found');
 }
 
 function bumpMaster(
@@ -226,6 +231,29 @@ export function deleteThisOccurrence(
   return { status: 200, body: { event: projectEvent(next, me.id) } };
 }
 
+/**
+ * 「この回だけ変更」を元に戻す（§6.1 の「元に戻す」。§24 D34）: 例外行を消して、シリーズどおりの回に戻す。
+ * 例外行がなければ何もしない
+ */
+export function revertThisOccurrence(
+  db: DbLike,
+  clock: Clock,
+  me: MemberRow,
+  master: EventRecord,
+  rid: string,
+): { status: 200; body: { event: ReturnType<typeof projectEvent> } } {
+  const exception = loadExceptions(db, master.id).find(
+    (e) => e.recurrenceId === rid && e.deletedAt === null,
+  );
+  if (!exception) return { status: 200, body: { event: projectEvent(master, me.id) } };
+  const now = clock.now();
+  db.delete(events).where(eq(events.id, exception.id)).run();
+  recordChange(db, 'event', exception.id, now);
+  const next = bumpMaster(db, me, master, now);
+  recordActivity(db, clock, me.id, 'update', exception, [`${ridLabel(rid)} の回を元に戻した`]);
+  return { status: 200, body: { event: projectEvent(next, me.id) } };
+}
+
 /* ───────── これ以降 ───────── */
 
 /**
@@ -250,38 +278,49 @@ export function updateFollowing(
     discarded: Discarded;
   };
 } | null {
-  if (!isSeriesOccurrence(master, rid)) {
-    // 例外行で動かした回でも、元の回がシリーズにあればよい
-    const hasException = loadExceptions(db, master.id).some(
-      (e) => e.recurrenceId === rid && e.deletedAt === null,
-    );
-    if (!hasException) throw new ApiError(404, 'not_found', 'この回は見つかりません');
-  }
+  requireOccurrence(db, master, rid);
   const split = splitSeries(master, rid);
   if (!split) return null;
   const times = occurrenceFields(master, rid);
-  if (!times) throw new ApiError(404, 'not_found', 'この回は見つかりません');
+  if (!times) throw new ApiError(404, 'occurrence_not_found');
   const tailBase: EventRecord = { ...master, ...times, rrule: split.tailRrule, exdates: [] };
-  // 日付を動かしたら、曜日・日の指定も同じだけずらす（rrule を変えていなければ）
-  let tailChanges = changes;
-  if (changes.rrule === undefined && hasTimeChange(changes)) {
-    const moved = fieldsFromChanges(tailBase, changes);
+  // 件名だけ直したときに、例外で動かした日時を変更と取り違えない（§24 D34）
+  const { base } = currentOccurrence(db, master, rid);
+  const dropped = dropUnchangedTimes(base, changes);
+  if ('errors' in dropped) throw validationError(dropped.errors);
+  // 日付を動かしたら、曜日・日の指定も動かした先に合わせる（rrule を変えていなければ）
+  let tailChanges = dropped.changes;
+  if (tailChanges.rrule === undefined && hasTimeChange(tailChanges)) {
+    const moved = fieldsFromChanges(tailBase, tailChanges);
     if ('errors' in moved) throw validationError(moved.errors);
     const from = times.startDate ?? toJstParts(times.startAt ?? 0).date;
     const to = moved.value.startDate ?? toJstParts(moved.value.startAt ?? 0).date;
     const parsed = parseRrule(split.tailRrule);
     if (parsed.ok && from !== to) {
-      tailChanges = { ...changes, rrule: formatRrule(shiftRule(parsed.rule, diffDays(from, to))) };
+      const shifted = shiftRule(parsed.rule, from, to);
+      if (!shifted) throw validationError([{ field: 'startAt', message: MOVE_ERROR }]);
+      tailChanges = { ...tailChanges, rrule: formatRrule(shifted) };
     }
   }
   const fields = fieldsFromChanges(tailBase, tailChanges);
   if ('errors' in fields) throw validationError(fields.errors);
   const f = { ...fields.value, memberIds: ordered(fields.value.memberIds) };
   checkMembers(f.memberIds, master.memberIds);
+  // 新しいシリーズの開始がその規則の回になるか（ならなければ、始まりの回がない予定になる）
+  if (f.rrule) {
+    const rule = parseRrule(f.rrule);
+    const p = toJstParts(f.startAt ?? 0);
+    const start = f.allDay
+      ? { date: f.startDate ?? '', time: '00:00' }
+      : { date: p.date, time: p.time };
+    if (rule.ok && !isOccurrenceOf(rule.rule, start, start)) {
+      throw validationError([{ field: 'startAt', message: MOVE_ERROR }]);
+    }
+  }
   const now = clock.now();
   const id = newId ?? uuidv7(now);
   checkUnusedId(db, id);
-  const exceptions = discardExceptions(db, me, master, rid, now);
+  const exceptions = discardExceptions(db, master, (r) => isAtOrAfter(r, rid), now);
   const head = bumpMaster(db, me, master, now, {
     rrule: split.headRrule,
     exdates: split.headExdates,
@@ -306,7 +345,11 @@ export function updateFollowing(
   recordChange(db, 'event', id, now);
   copyReminderPrefs(db, master.id, id);
   recordActivity(db, clock, me.id, 'update', head, [`${ridLabel(rid)} 以降を別の予定に分けた`]);
-  recordActivity(db, clock, me.id, 'create', created);
+  // 何を変えたかは新しいシリーズの行に（見える人は新しいシリーズの公開・非公開に従う）
+  recordActivity(db, clock, me.id, 'create', created, [
+    `${ridLabel(rid)} 以降を変更`,
+    ...describeDiff(tailBase, created, memberNames(db)),
+  ]);
   return {
     status: 200,
     body: {
@@ -325,10 +368,11 @@ export function deleteFollowing(
   master: EventRecord,
   rid: string,
 ): { status: 200; body: { event: ReturnType<typeof projectEvent>; discarded: Discarded } } | null {
+  requireOccurrence(db, master, rid);
   const split = splitSeries(master, rid);
   if (!split) return null;
   const now = clock.now();
-  const exceptions = discardExceptions(db, me, master, rid, now);
+  const exceptions = discardExceptions(db, master, (r) => isAtOrAfter(r, rid), now);
   const next = bumpMaster(db, me, master, now, {
     rrule: split.headRrule,
     exdates: split.headExdates,
@@ -346,8 +390,8 @@ export function deleteFollowing(
 /* ───────── すべて ───────── */
 
 /**
- * 「すべて」の日時の変更を、選んだ回の元の日時からの差分としてマスターの changes にする（§11）。
- * 日時を変えていなければ changes のまま
+ * 「すべて」の変更をマスターの changes にする（§11）。日時は回の今の中身と違うときだけ変更とし、
+ * 選んだ回の元の日時からの差分をマスターに当てる（core の allScopeChanges。§24 D34）
  */
 export function allScopeChanges(
   db: DbLike,
@@ -355,44 +399,38 @@ export function allScopeChanges(
   rid: string | null | undefined,
   changes: EventChanges,
 ): EventChanges {
-  if (!rid || !master.rrule || !hasTimeChange(changes)) return changes;
+  if (!rid || !master.rrule) return changes;
+  requireOccurrence(db, master, rid);
   const { base } = currentOccurrence(db, master, rid);
-  const original = occurrenceFields(master, rid);
-  if (!original) return changes;
-  const moved = fieldsFromChanges({ ...base, ...original }, changes);
-  if ('errors' in moved) throw validationError(moved.errors);
-  const shifted = shiftSeries(master, rid, moved.value);
-  if (!shifted) return changes;
-  const out: EventChanges = { ...changes, allDay: shifted.allDay };
-  if (shifted.allDay) {
-    out.startDate = shifted.startDate ?? undefined;
-    out.endDate = shifted.endDate ?? undefined;
-    delete out.startAt;
-    delete out.endAt;
-  } else {
-    out.startAt = toIsoJst(shifted.startAt ?? 0);
-    out.endAt = shifted.endAt === null ? null : toIsoJst(shifted.endAt);
-    delete out.startDate;
-    delete out.endDate;
-  }
-  if (changes.rrule === undefined && shifted.rrule !== master.rrule) out.rrule = shifted.rrule;
-  return out;
+  const r = coreAllScopeChanges(master, rid, base, changes);
+  if ('errors' in r) throw validationError(r.errors);
+  return r.changes;
 }
 
-/** 「すべて」で回の開始が変わるなら、例外・取り消しをリセットする（§11。件数を返す） */
+/**
+ * 「すべて」の変更で消える例外・取り消しを消す（§11。件数を返す）。開始が変われば全部、規則だけが変われば
+ * 新しい規則で回にならないものだけ（core の seriesLoss。C-04 の件数と同じ計算。§24 D34）
+ */
 export function resetIfStartsChange(
   db: DbLike,
-  me: MemberRow,
   before: EventRecord,
   after: EventRecord,
   now: number,
 ): { next: EventRecord; discarded: Discarded } {
-  if (!before.rrule || !startsChange(before, after)) {
-    return { next: after, discarded: { exceptions: 0, exdates: 0 } };
-  }
-  const exceptions = discardExceptions(db, me, before, null, now);
+  if (!before.rrule) return { next: after, discarded: { exceptions: 0, exdates: 0 } };
+  const active = loadExceptions(db, before.id).filter(
+    (e) => e.deletedAt === null && e.recurrenceId !== null,
+  );
+  const loss = seriesLoss(
+    before,
+    after,
+    active.map((e) => e.recurrenceId as string),
+  );
+  const lost = new Set(loss.exceptions);
+  const exceptions = discardExceptions(db, before, (r) => lost.has(r), now);
+  const lostExdates = new Set(loss.exdates);
   return {
-    next: { ...after, exdates: [] },
-    discarded: { exceptions, exdates: before.exdates.length },
+    next: { ...after, exdates: before.exdates.filter((d) => !lostExdates.has(d)) },
+    discarded: { exceptions, exdates: loss.exdates.length },
   };
 }

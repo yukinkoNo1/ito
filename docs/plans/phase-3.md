@@ -40,3 +40,37 @@
 
 ## 5. 決めたこと（§24 に書く）
 - D33: 繰り返しの細則（回の key は例外行でも `親の ID@recurrenceId`、If-Match は親の version、following の新シリーズの id は exceptionId、BYHOUR などは拒否、C-04 に消える件数）
+- D34: Phase 3 のレビューで決めた細則（差分だけを送る、seriesLoss、破棄した例外行は消す、毎月の規則の移動、RRULE の並びと sameRule、この回だけ変更の元に戻す（revert）、回の送信待ちの 409・404、「この予定だけ」の制限、保存したあとの回へ移る、月末の問い、rrule の ESM）
+
+## 6. レビューで直したこと（P3-*）
+- P3-core-01: rrule（UMD）を名前空間から取り出す。Node の ESM（tsx）で @ito/core・サーバーのアプリ・CLI を読み込むテスト（server test/esm-load.test.ts）
+- P3-core-02・P3-server-01・P3-web-03・P3-spec-tests-01: 「これ以降」「すべて」も回の今の中身との差分だけを送る（web viewmodels/series.ts の occurrenceChanges、store）。サーバーも日時がその回の今の中身と同じなら外す（core dropUnchangedTimes・allScopeChanges）。テスト: core series.test.ts、server「例外で動かした回から「すべて」「これ以降」で件名だけ直しても…」、web phase3.test.ts「送る変更は回の今の中身との差分だけ」
+- P3-core-06・P3-server-03・P3-web-02・P3-spec-tests-02・P3-web-12: 消える件数を core の seriesLoss で出し、サーバーのリセットと C-04 で共有。終わりだけの変更は回でなくなるものだけ消す。最初の回の「これ以降」は「すべて」と同じ件数、削除ならシリーズごとゴミ箱（元に戻せる）
+- P3-core-03: shiftRule を「動かした先の日・第 n」にし、毎月は開始を元の月の回に置き直す。月をまたぐ・決められない・回にならない移動は 422
+- P3-core-04: 毎日で曜日を絞り、間隔が 7 の倍数の規則を拒否
+- P3-core-05: RRULE の値の並びをそろえる。規則の比較は sameRule（書き方の違いを同じとみなす）。WKST 付きは「カスタム」。toPreset → fromPreset で規則が変わらないテスト
+- P3-server-02: 「これ以降を削除」でもシリーズの回か確かめる（404 occurrence_not_found）
+- P3-server-04: 破棄した例外行はゴミ箱に入れずに消す（取り消しで戻らない）
+- P3-server-08: 「これ以降を変更」の履歴の新しいシリーズの行に、何を変えたかの差分
+- P3-test-06: scope ごとの古い If-Match の 409、同じ Idempotency-Key の再送、PUT reminders の 422・403・404
+- P3-web-01・P3-web-08: 繰り返しの回の送信待ちの 409・404 occurrence_not_found は、送信待ちと手元の例外行を捨てて全件を取り直し、知らせる（C-05 に出さない）
+- P3-web-04・P3-web-11: 「この予定だけ」では公開・非公開と繰り返しを変えられない（C-04 で理由を出して無効。store でも断る）
+- P3-web-05: 新しく作った「この回だけ変更」の元に戻すは例外行を消す（送る前なら送信待ちごと、送ったあとは revert）
+- P3-web-07: 「すべて」の変更は、日時・繰り返しを変えないときだけ元に戻せる
+- P3-web-09: 保存で回が変わったら詳細をその回に移す（nav.replaceEvent）
+- P3-web-10: 29〜31 日の毎月は、その日のまま入れて「月末にしますか？」と聞く
+- P3-spec-tests-06: PROGRESS の Phase 3 の確認の行に、件数と EXIT を書く
+- P3-spec-tests-08: 「これ以降」の新しいシリーズの ID を PWA が振る（exceptionId）
+
+## 却下したもの
+- P3-spec-tests-03・P3-web-06（store でオフラインの「これ以降」「すべて」を断る）: §12 はしくみを「C-04 で無効化し理由を表示」と定めていて、C-04 は同期の通信エラーと navigator.onLine で無効にしている（E2E で確認。D33）
+- P3-spec-tests-04・P3-web-14・P3-core-09（3 通りの比較のデータに例外・取り消しを入れる）: §23 が求めるのは同じデータで 3 通りが一致すること。例外・取り消しの展開は core・server・E2E で別に確かめている
+- P3-spec-tests-05（scope ごとの If-Match・Idempotency のテスト）: 実装は scope に関係なく効く。テストは P3-test-06 で足した
+- P3-spec-tests-07・P3-core-07（splitSeries・shiftSeries の core の単体テスト）: 部品とサーバーの API テストで確かめていた。shiftSeries・allScopeChanges・seriesLoss・splitSeries の単体テストは P3-core-* の直しで足した（core test/series.test.ts）
+- P3-spec-tests-09・P3-core-08（タイムゾーンを変えたテスト）: 実装は Date.UTC と getUTC* だけで浮動時刻を扱い、ほかの TZ でも同じ結果になることをレビューで確かめている。§21 の JST の境界のテストはある
+- P3-spec-tests-10（PUT reminders の入力の検査のテスト）: 実装は正しい。テストは P3-test-06 で足した
+- P3-server-05（分割で非公開の新シリーズにほかの家族の reminder_prefs が複製される）: §11 のとおり。通知（Phase 4）は他人の非公開には送らない（core effectiveOffsets）
+- P3-test-07（例外行の出口ごとの漏えいのテスト）: 投影は行ごとの visibility・ownerId による共通の処理で、例外行は親から複製している。出口ごとのテストは Phase 1 にある
+- P3-web-13（following の exceptionId）: P3-spec-tests-08 として直した
+- P3-core-10（BYxx のない FREQ=MONTHLY が「カスタム」）: §11 は画面で作れない形を「カスタム」とすることを認めている
+
