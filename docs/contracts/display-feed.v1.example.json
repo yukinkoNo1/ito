@@ -1,0 +1,37 @@
+{
+  "version": 1,
+  "range": { "from": "2026-09-29", "to": "2026-10-02" },
+  "holidays": [],
+  "members": [
+    { "id": "0192f5a0-1c00-7000-8000-000000000001", "name": "お父さん", "mark": "父", "color": "kaki" },
+    { "id": "0192f5a0-1c00-7000-8000-000000000002", "name": "お母さん", "mark": "母", "color": "wakatake" },
+    { "id": "0192f5a0-1c00-7000-8000-000000000003", "name": "ゆき", "mark": "ゆ", "color": "fuji" },
+    { "id": "0192f5a0-1c00-7000-8000-000000000004", "name": "はる", "mark": "は", "color": "asagi" }
+  ],
+  "occurrences": [
+    { "key": "0192f5b1-0000-7000-8000-00000000e001", "title": "出張（東京）",
+      "memberIds": ["0192f5a0-1c00-7000-8000-000000000001"], "forEveryone": false, "busy": true, "private": false,
+      "allDay": true, "startDate": "2026-09-28", "endDate": "2026-09-30" },
+    { "key": "0192f5b1-0000-7000-8000-00000000e002", "title": "歯医者",
+      "memberIds": ["0192f5a0-1c00-7000-8000-000000000002"], "forEveryone": false, "busy": true, "private": false,
+      "allDay": false, "startAt": "2026-09-29T10:00:00+09:00", "endAt": "2026-09-29T11:00:00+09:00" },
+    { "key": "0192f5b1-0000-7000-8000-00000000e003", "title": null,
+      "memberIds": ["0192f5a0-1c00-7000-8000-000000000003"], "forEveryone": false, "busy": true, "private": true,
+      "allDay": false, "startAt": "2026-09-29T17:00:00+09:00", "endAt": null },
+    { "key": "0192f5b1-0000-7000-8000-00000000e004", "title": "バイト",
+      "memberIds": ["0192f5a0-1c00-7000-8000-000000000003"], "forEveryone": false, "busy": true, "private": false,
+      "allDay": false, "startAt": "2026-09-29T19:00:00+09:00", "endAt": "2026-09-29T22:00:00+09:00" },
+    { "key": "0192f5b1-0000-7000-8000-00000000e005", "title": "町内会の当番",
+      "memberIds": ["0192f5a0-1c00-7000-8000-000000000002", "0192f5a0-1c00-7000-8000-000000000003"], "forEveryone": false, "busy": false, "private": false,
+      "allDay": true, "startDate": "2026-09-30", "endDate": "2026-09-30" },
+    { "key": "0192f5b1-0000-7000-8000-00000000e006@2026-09-30T07:00", "title": "朝練",
+      "memberIds": ["0192f5a0-1c00-7000-8000-000000000004"], "forEveryone": false, "busy": true, "private": false,
+      "allDay": false, "startAt": "2026-09-30T07:00:00+09:00", "endAt": "2026-09-30T08:30:00+09:00" },
+    { "key": "0192f5b1-0000-7000-8000-00000000e007", "title": "焼肉",
+      "memberIds": [], "forEveryone": true, "busy": true, "private": false,
+      "allDay": false, "startAt": "2026-10-01T18:00:00+09:00", "endAt": "2026-10-01T20:00:00+09:00" },
+    { "key": "0192f5b1-0000-7000-8000-00000000e008", "title": "夜釣り",
+      "memberIds": ["0192f5a0-1c00-7000-8000-000000000001"], "forEveryone": false, "busy": true, "private": false,
+      "allDay": false, "startAt": "2026-10-01T22:00:00+09:00", "endAt": "2026-10-02T01:00:00+09:00" }
+  ]
+}
