@@ -10,8 +10,9 @@ import {
 } from '@ito/core';
 import { and, asc, eq, isNull } from 'drizzle-orm';
 import type { Db, DbLike } from '../db/client';
-import { changes, type MemberRow, members } from '../db/schema';
+import { changes, type MemberRow, members, pendingNotices } from '../db/schema';
 import { ApiError } from '../errors';
+import { deleteSubscriptionsOf } from './push';
 
 const NAME_MAX = 20;
 
@@ -214,6 +215,11 @@ export function updateMember(
       disabledAt: willBeActive ? null : (current.disabledAt ?? now),
     };
     tx.update(members).set(next).where(eq(members.id, id)).run();
+    if (!willBeActive) {
+      // 無効化したら、その人の端末への通知をすべて止める（§13・§18 T9）。まとめ待ちの変更通知も捨てる
+      deleteSubscriptionsOf(tx, id);
+      tx.delete(pendingNotices).where(eq(pendingNotices.recipientId, id)).run();
+    }
     recordMemberChange(tx, id, now);
     return next;
   });

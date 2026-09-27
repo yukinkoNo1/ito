@@ -61,6 +61,19 @@ docker compose exec app node dist/cli.js feed-token revoke <id>               # 
 - キーを表示せずに動作を確かめる: `docker compose exec -T app node --input-type=module - < ../scripts/feed-check-inner.mjs`（確認用のキーを作って要求し、止めて、状態コードだけを出す）
 - 開発中は `pnpm feed-token create --name テスト` / `pnpm feed-token list`（開発用 DB）、`node scripts/feed-check.mjs`（ビルド済みのサーバーで確認）
 
+### 通知（Web Push。SPEC §15）
+- VAPID の鍵は `npx web-push generate-vapid-keys` で作り、`app.env` の `VAPID_PUBLIC_KEY`・`VAPID_PRIVATE_KEY` に書く。`VAPID_SUBJECT` は `mailto:あなたのアドレス` か `https://…`（形が違うと Apple の Push が拒否する。起動時に確かめる）
+- 鍵を入れないと通知は無効（設定の「テスト通知」が「家のサーバーで通知の設定がされていません」と出る。ログに `push disabled`）
+- 端末をなくしたとき: 設定 →「家族の管理」→ その人 →「この人の端末の通知を止める」（Tailscale を止めても Push は Apple・Google 経由で届くため。§18 T9）
+
+**実機での確認の手順**（Phase 4 の受け入れ。持ち主が行う）
+1. iPhone の Safari で いと を開き、共有 →「ホーム画面に追加」。**ホーム画面のアイコンから**開く（Safari のままでは通知を使えない）
+2. ホームの案内か設定の「通知をオンにする」を押し、許可する（設定の「通知を受け取る端末」に iPhone が出る）
+3. 設定の「テスト通知」→ 数秒以内にロック画面に「いと」の通知が届く
+4. 5 分後に始まる予定を作り、「自分への通知」を「開始時」にする（または 5 分前に始まる予定の 30 分前の既定値を確かめる）→ 時刻どおりに届く。通知を押すとその予定の詳細が開く
+5. 設定で朝のまとめをオン（既定 7:00）にし、翌日に予定を入れておく。**アプリを 1 日開かずに**、翌朝のまとめが届くことを確かめる（届かなければ、設定の端末の一覧の「最後に届いた日」とサーバーのログの `push` の行の状態コードを見る）
+6. ロック画面に予定名を出さない設定にして、テスト通知以外の通知が「いと／予定の通知があります」になることを確かめる
+
 ## 家族の端末のセットアップ（SPEC 付録B）
 
 **iPhone**

@@ -3,7 +3,7 @@ import type { AddressInfo } from 'node:net';
 import path from 'node:path';
 import { serve } from '@hono/node-server';
 import type { Clock } from '@ito/core';
-import { type App, createApp } from './app';
+import { type App, createApp, type PushDeps } from './app';
 import { type Database_, openDatabase, runMigrations } from './db/client';
 import type { Env } from './env';
 import type { Logger } from './logger';
@@ -35,7 +35,7 @@ export async function startServer(
   clock: Clock,
   logger: Logger,
   paths: RuntimePaths,
-  extras: { jobs?: (deps: { database: Database_ }) => Stoppable[] } = {},
+  extras: { jobs?: (deps: { database: Database_ }) => Stoppable[]; push?: PushDeps } = {},
 ): Promise<RunningServer> {
   if (env.DATABASE_PATH !== ':memory:') {
     mkdirSync(path.dirname(path.resolve(env.DATABASE_PATH)), { recursive: true });
@@ -51,6 +51,7 @@ export async function startServer(
     clock,
     logger,
     staticDir,
+    ...(extras.push ? { push: extras.push } : {}),
   });
 
   const jobs = extras.jobs?.({ database }) ?? [];

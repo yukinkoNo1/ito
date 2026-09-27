@@ -1,13 +1,14 @@
 import type { ItoDb } from '../data/db';
 import { clearDevice } from './device';
+import { unsubscribePush as unsubscribeThisDevice } from './push';
 
 /**
- * この端末からログアウト（§17）: Push の購読を解除 → IndexedDB・Cache Storage を削除 → はじめて（S-11）へ。
- * Push の購読の解除（サーバーの購読の削除を含む）は Phase 4 でつなぐ。
+ * この端末からログアウト（§17）: Push の購読を解除（サーバーの購読も消す）→ IndexedDB・Cache Storage を削除 →
+ * はじめて（S-11）へ。
  */
 export async function logoutThisDevice(
   db: ItoDb,
-  unsubscribePush: () => Promise<void> = async () => {},
+  unsubscribePush: () => Promise<void> = () => unsubscribeThisDevice(),
 ): Promise<void> {
   try {
     await unsubscribePush();

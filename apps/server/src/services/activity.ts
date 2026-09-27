@@ -12,6 +12,7 @@ import {
 import { and, desc, eq, gt, lt, ne, or, sql } from 'drizzle-orm';
 import type { DbLike } from '../db/client';
 import { type ActivityRow, activity, type MemberRow, members } from '../db/schema';
+import { enqueueFamilyNotices } from './family-notices';
 
 export type ActivityAction = 'create' | 'update' | 'delete' | 'restore';
 
@@ -108,6 +109,8 @@ export function recordActivity(
       createdAt: now,
     })
     .run();
+  // 家族の変更通知のまとめ待ちに積む（§15。送るのはスケジューラ）
+  enqueueFamilyNotices(db, now, actorId, action, event);
 }
 
 /** その予定の履歴をすべて持ち主だけのものにする（家族の予定を非公開にしたとき） */

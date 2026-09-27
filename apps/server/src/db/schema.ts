@@ -185,3 +185,53 @@ export const feedTokens = sqliteTable('feed_tokens', {
 });
 
 export type FeedTokenRow = typeof feedTokens.$inferSelect;
+
+/** Push 購読（端末ごと。§10・§15）。endpoint は画面にもログにも出さない */
+export const pushSubscriptions = sqliteTable(
+  'push_subscriptions',
+  {
+    id: text('id').primaryKey(),
+    memberId: text('member_id')
+      .notNull()
+      .references(() => members.id),
+    endpoint: text('endpoint').notNull().unique(),
+    p256dh: text('p256dh').notNull(),
+    auth: text('auth').notNull(),
+    label: text('label').notNull(),
+    createdAt: integer('created_at').notNull(),
+    lastOkAt: integer('last_ok_at'),
+    failCount: integer('fail_count').notNull().default(0),
+  },
+  (t) => [index('push_subscriptions_member').on(t.memberId)],
+);
+
+export type PushSubscriptionRow = typeof pushSubscriptions.$inferSelect;
+
+/** 重複送信防止（送信成功後に書く。60 日で削除） */
+export const notificationLog = sqliteTable(
+  'notification_log',
+  {
+    key: text('key').primaryKey(),
+    memberId: text('member_id').notNull(),
+    sentAt: integer('sent_at').notNull(),
+  },
+  (t) => [index('notification_log_sent').on(t.sentAt)],
+);
+
+/** 家族の変更通知のまとめ待ち（§15。2 分まとめ・静かな時間） */
+export const pendingNotices = sqliteTable(
+  'pending_notices',
+  {
+    id: text('id').primaryKey(),
+    recipientId: text('recipient_id').notNull(),
+    actorId: text('actor_id').notNull(),
+    eventId: text('event_id').notNull(),
+    action: text('action').notNull(),
+    summary: text('summary').notNull(),
+    createdAt: integer('created_at').notNull(),
+    flushedAt: integer('flushed_at'),
+  },
+  (t) => [index('pending_notices_recipient').on(t.recipientId, t.flushedAt)],
+);
+
+export type PendingNoticeRow = typeof pendingNotices.$inferSelect;

@@ -71,23 +71,45 @@ describe('env の起動時検査（SPEC §14）', () => {
   });
 
   it('VAPID は 2 つそろえ、subject は mailto: か https:', () => {
-    expect(problemsOf({ ...prod, VAPID_PUBLIC_KEY: 'pub' })).not.toHaveLength(0);
+    // 形だけ正しい見本の鍵（P-256 の公開鍵 65 バイト・秘密鍵 32 バイトを base64url にした長さ）
+    const pub = `B${'A'.repeat(86)}`;
+    const priv = 'A'.repeat(43);
+    expect(problemsOf({ ...prod, VAPID_PUBLIC_KEY: pub })).not.toHaveLength(0);
     expect(
       problemsOf({
         ...prod,
-        VAPID_PUBLIC_KEY: 'pub',
-        VAPID_PRIVATE_KEY: 'priv',
+        VAPID_PUBLIC_KEY: pub,
+        VAPID_PRIVATE_KEY: priv,
         VAPID_SUBJECT: 'you@example.com',
       }),
     ).not.toHaveLength(0);
     expect(
       problemsOf({
         ...prod,
-        VAPID_PUBLIC_KEY: 'pub',
-        VAPID_PRIVATE_KEY: 'priv',
+        VAPID_PUBLIC_KEY: pub,
+        VAPID_PRIVATE_KEY: priv,
         VAPID_SUBJECT: 'mailto:you@example.com',
       }),
     ).toHaveLength(0);
+    expect(
+      problemsOf({
+        ...prod,
+        VAPID_PUBLIC_KEY: pub,
+        VAPID_PRIVATE_KEY: priv,
+        VAPID_SUBJECT: 'https://ito.example.ts.net',
+      }),
+    ).toHaveLength(0);
+  });
+
+  it('VAPID の鍵の長さが違えば起動しない（値はメッセージに出さない）', () => {
+    const problems = problemsOf({
+      ...prod,
+      VAPID_PUBLIC_KEY: 'pub-not-a-key',
+      VAPID_PRIVATE_KEY: 'priv-not-a-key',
+      VAPID_SUBJECT: 'mailto:you@example.com',
+    });
+    expect(problems).toHaveLength(2);
+    expect(problems.join(' ')).not.toContain('not-a-key');
   });
 
   it('エラーメッセージに値（秘密情報）を出さない', () => {

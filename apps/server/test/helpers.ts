@@ -1,7 +1,7 @@
 import { Writable } from 'node:stream';
 import { fileURLToPath } from 'node:url';
 import { type FakeClock, fakeClock, fromJst } from '@ito/core';
-import { type App, createApp } from '../src/app';
+import { type App, createApp, type PushDeps } from '../src/app';
 import { type Database_, openDatabase, runMigrations } from '../src/db/client';
 import { type Env, loadEnv } from '../src/env';
 import { createLogger, type Logger } from '../src/logger';
@@ -62,7 +62,7 @@ export interface TestContext {
 
 export function createTestContext(
   env: Env,
-  opts: { now?: number; staticDir?: string | null } = {},
+  opts: { now?: number; staticDir?: string | null; push?: PushDeps } = {},
 ): TestContext {
   const database = openDatabase(':memory:');
   runMigrations(database.db, MIGRATIONS_DIR);
@@ -76,6 +76,7 @@ export function createTestContext(
     clock,
     logger,
     staticDir: opts.staticDir ?? null,
+    ...(opts.push ? { push: opts.push } : {}),
   });
   return { app, env, database, clock, logs, logger, close: () => database.close() };
 }

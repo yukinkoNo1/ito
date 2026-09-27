@@ -129,6 +129,17 @@ export function loadEnv(source: Record<string, string | undefined>): Env {
         }
       })();
     if (!ok) problems.push('VAPID_SUBJECT: mailto: か https: の正しい形式にしてください');
+    // 鍵の長さ（P-256 の公開鍵 65 バイト・秘密鍵 32 バイト）。値そのものはメッセージに入れない
+    const bytes = (v: string) =>
+      /^[A-Za-z0-9_-]+$/.test(v) ? Buffer.from(v, 'base64url').length : 0;
+    if (bytes(env.VAPID_PUBLIC_KEY as string) !== 65)
+      problems.push(
+        'VAPID_PUBLIC_KEY: 形式が正しくありません（npx web-push generate-vapid-keys で作った値にしてください）',
+      );
+    if (bytes(env.VAPID_PRIVATE_KEY as string) !== 32)
+      problems.push(
+        'VAPID_PRIVATE_KEY: 形式が正しくありません（npx web-push generate-vapid-keys で作った値にしてください）',
+      );
   }
 
   if (problems.length > 0) throw new EnvError(problems);

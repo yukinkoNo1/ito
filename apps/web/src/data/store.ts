@@ -15,6 +15,7 @@ import {
   type MeDTO,
   meDtoSchema,
   occurrenceFields,
+  type ReminderPrefDTO,
   recordToDto,
   splitSeries,
   syncResponseSchema,
@@ -30,6 +31,10 @@ import {
 import { apiRequest, type Fetcher, NetworkError, problemCode } from './api';
 import type { ConflictRecord, ItoDb, LocalEvent, OutboxItem } from './db';
 import { diffChanges, dtoToCreateBody } from './diff';
+
+/** まだ送っていない自分への通知（予定の ID → offsets） */
+type PendingReminders = Record<string, number[]>;
+const PENDING_REMINDERS = 'pendingReminderPrefs';
 
 export type SyncStatus = 'synced' | 'syncing' | 'offline' | 'error';
 
@@ -176,6 +181,9 @@ export class DataStore {
     const pushed = await this.push();
     if (pushed === 'network') return this.setState({ status: 'offline' });
     if (pushed === 'blocked') return;
+    const reminders = await this.pushReminders();
+    if (reminders === 'network') return this.setState({ status: 'offline' });
+    if (reminders === 'blocked') return;
     const pulled = await this.pull();
     if (pulled === 'network') return this.setState({ status: 'offline' });
     if (pulled === 'blocked') return;
@@ -288,7 +296,12 @@ export class DataStore {
         await db.setMeta('cursor', data.cursor);
         await db.setMeta('me', data.me);
         await db.setMeta('unreadActivity', data.unreadActivity);
-        await db.setMeta('myReminderPrefs', data.myReminderPrefs);
+        // まだ送っていない自分への通知は、取得で上書きしない
+        const pendingPrefs = (await db.getMeta<PendingReminders>(PENDING_REMINDERS)) ?? {};
+        await db.setMeta('myReminderPrefs', [
+          ...data.myReminderPrefs.filter((p) => !(p.eventId in pendingPrefs)),
+          ...Object.entries(pendingPrefs).map(([eventId, offsets]) => ({ eventId, offsets })),
+        ]);
         await db.setMeta('lastSyncedAt', this.clock.now());
       },
     );
@@ -504,6 +517,63 @@ export class DataStore {
       message: detail ? `保存できませんでした（${detail}）` : '保存できませんでした',
     });
     return 'next';
+  }
+
+  /* ───────── 自分への通知（§15） ───────── */
+
+  /**
+   * 自分への通知を変える。手元にすぐ反映し、送るのは同期のとき（予定がまだ送信待ちなら、送れたあと）。
+   * 予定の送信待ち（outbox）とは別に持つ（本人だけの設定で、競合がないため）
+   */
+  async setMyReminders(eventId: string, offsets: number[]): Promise<void> {
+    const db = this.db;
+    const sorted = [...new Set(offsets)].sort((a, b) => a - b);
+    await db.transaction('rw', [db.meta], async () => {
+      const pending = (await db.getMeta<PendingReminders>(PENDING_REMINDERS)) ?? {};
+      await db.setMeta(PENDING_REMINDERS, { ...pending, [eventId]: sorted });
+      const prefs = (await db.getMeta<ReminderPrefDTO[]>('myReminderPrefs')) ?? [];
+      await db.setMeta('myReminderPrefs', [
+        ...prefs.filter((p) => p.eventId !== eventId),
+        { eventId, offsets: sorted },
+      ]);
+    });
+    void this.syncNow();
+  }
+
+  /** まだ送っていない自分への通知を送る（PUT /api/events/:id/reminders） */
+  private async pushReminders(): Promise<'ok' | 'network' | 'blocked'> {
+    const db = this.db;
+    const pending = (await db.getMeta<PendingReminders>(PENDING_REMINDERS)) ?? {};
+    for (const [eventId, offsets] of Object.entries(pending)) {
+      // 予定の作成（「これ以降」の新しいシリーズを含む）がまだ送信待ちなら、送れてから
+      const waiting = (await db.outbox.toArray()).some(
+        (o) => o.eventId === eventId || exceptionIdOf(o.body) === eventId,
+      );
+      if (waiting) continue;
+      let res: Awaited<ReturnType<typeof apiRequest>>;
+      try {
+        res = await apiRequest('PUT', `/api/events/${encodeURIComponent(eventId)}/reminders`, {
+          body: { offsets },
+          fetcher: this.fetcher,
+        });
+      } catch (e) {
+        if (e instanceof NetworkError) return 'network';
+        throw e;
+      }
+      const blocked = this.blockFor(res.status, res.body);
+      if (blocked) return blocked;
+      // 429・5xx は次の同期で送り直す
+      if (res.status === 429 || res.status >= 500) continue;
+      // 保存できた・付けられない（予定が消えた 404、見られない 403、形が違う 422）は待ちから外す
+      await db.transaction('rw', [db.meta], async () => {
+        const now = (await db.getMeta<PendingReminders>(PENDING_REMINDERS)) ?? {};
+        // 送っているあいだにまた変えていたら、次の同期で送る
+        if (JSON.stringify(now[eventId]) !== JSON.stringify(offsets)) return;
+        const { [eventId]: _sent, ...rest } = now;
+        await db.setMeta(PENDING_REMINDERS, rest);
+      });
+    }
+    return 'ok';
   }
 
   /* ───────── 変更（まず手元に反映し、outbox に積む） ───────── */

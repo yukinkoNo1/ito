@@ -16,6 +16,9 @@ import { registerEventRoutes } from './routes/events';
 import { registerFeedRoutes } from './routes/feed';
 import { registerMeRoutes } from './routes/me';
 import { registerMemberRoutes } from './routes/members';
+import { registerPushRoutes } from './routes/push';
+import { countSubscriptions } from './services/push';
+import type { PushSender } from './services/push-sender';
 import type { AppEnv } from './types';
 
 export const BODY_LIMIT_BYTES = 32 * 1024;
@@ -28,6 +31,13 @@ export interface AppDeps {
   logger: Logger;
   /** PWA の静的配信の場所。null なら配信しない（開発時は Vite が配信する） */
   staticDir: string | null;
+  /** Web Push（VAPID の鍵がなければ publicKey・sender とも null。§15） */
+  push?: PushDeps;
+}
+
+export interface PushDeps {
+  publicKey: string | null;
+  sender: PushSender | null;
 }
 
 export type App = Hono<AppEnv>;
@@ -106,7 +116,8 @@ export function createApp(deps: AppDeps): App {
   registerFeedRoutes(app, deps);
   registerMeRoutes(app, deps);
   registerEventRoutes(app, deps);
-  registerMemberRoutes(app, deps);
+  registerMemberRoutes(app, deps, (memberId) => countSubscriptions(db, memberId));
+  registerPushRoutes(app, { ...deps, push: deps.push ?? { publicKey: null, sender: null } });
 
   if (deps.staticDir) app.use('*', staticFiles(deps.staticDir));
 

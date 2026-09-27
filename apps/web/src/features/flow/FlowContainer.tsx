@@ -4,20 +4,19 @@ import { useNavigate } from 'react-router';
 import { useEvents, useMe, useMeta } from '../../app/data-context';
 import { useSyncVM } from '../../app/hooks';
 import { useNav } from '../../app/nav';
+import { useToast } from '../../app/toast';
 import { useVmContext } from '../../app/use-vm';
 import { useViewDate } from '../../app/view-date';
-import { DEVICE_KEYS, readDevice, writeDevice } from '../../pwa/device';
-import { isStandalone } from '../../pwa/install';
+import { DEVICE_KEYS, writeDevice } from '../../pwa/device';
+import {
+  homeNoticeKind,
+  INSTALL_NOTICE,
+  NOTIFICATIONS_NOTICE,
+  type NoticeKind,
+} from '../../pwa/home-notice';
+import { enablePush, loadPublicKey } from '../../pwa/push';
 import UpcomingScreen from '../../ui/screens/UpcomingScreen';
-import type { HomeNoticeVM } from '../../ui/types';
 import { buildFlowScreen, FLOW_WINDOW_DAYS, shiftWeek } from '../../viewmodels/screens';
-
-/** ホームの案内（F-23 のうちホーム画面への追加。通知の案内は Phase 4） */
-export const INSTALL_NOTICE: HomeNoticeVM = {
-  kind: 'install',
-  message: 'ホーム画面に追加すると、アプリのようにすぐ開けます',
-  actionLabel: '追加の方法',
-};
 
 /** 端で足す日数と、足せる範囲（今日から過去 1 年・未来 3 年） */
 const EXTEND_DAYS = 28;
@@ -38,9 +37,21 @@ export function FlowContainer() {
   // いま見ている日（null = 今日）。週の帯・日付で移動すると変わる
   const [selected, setSelected] = useState<DateISO | null>(null);
   const [range, setRange] = useState<{ from: DateISO; to: DateISO } | null>(null);
-  const [notice, setNotice] = useState(
-    () => !isStandalone() && readDevice(DEVICE_KEYS.installNoticeDismissed) !== '1',
-  );
+  const [notice, setNotice] = useState<NoticeKind | null>(homeNoticeKind);
+  const [publicKey, setPublicKey] = useState<string | null>(null);
+  const toast = useToast();
+
+  // 通知の案内を出すときは公開鍵を先に取っておく（ボタンを押したあと最初に待つのは許可のダイアログ。§15）
+  useEffect(() => {
+    if (notice !== 'notifications') return;
+    let cancelled = false;
+    void loadPublicKey().then((key) => {
+      if (!cancelled) setPublicKey(key);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [notice]);
   const today = ctx?.today ?? null;
   const selectedDate = selected ?? today;
   const weekStart = me?.settings.weekStart ?? 0;
@@ -65,7 +76,12 @@ export function FlowContainer() {
       selectedDate,
       weekStart,
       unreadActivity: unread,
-      notice: notice ? INSTALL_NOTICE : null,
+      notice:
+        notice === 'install'
+          ? INSTALL_NOTICE
+          : notice === 'notifications'
+            ? NOTIFICATIONS_NOTICE
+            : null,
       showBackToToday: selectedDate !== ctx.today,
     });
     // sync は一覧の組み立てに使わない（60 秒ごとの同期で一覧を作り直さない）
@@ -117,10 +133,38 @@ export function FlowContainer() {
         );
       }}
       onNextWeek={() => jumpTo(shiftWeek(selectedDate, 1))}
-      onNoticeAction={() => navigate('/install')}
+      onNoticeAction={() => {
+        if (notice !== 'notifications') {
+          navigate('/install');
+          return;
+        }
+        // 最初に待つのは requestPermission（enablePush の中）
+        void enablePush(publicKey).then((result) => {
+          if (result === 'enabled') {
+            toast.show({
+              kind: 'info',
+              message: 'この端末で通知を受け取ります',
+              actionLabel: null,
+            });
+          } else if (result !== 'denied') {
+            toast.show({
+              kind: 'error',
+              message: '通知をオンにできませんでした',
+              actionLabel: null,
+            });
+          }
+          // 許可を選んだら（許可しなかったときも）案内は消える
+          setNotice(homeNoticeKind());
+        });
+      }}
       onNoticeDismiss={() => {
-        writeDevice(DEVICE_KEYS.installNoticeDismissed, '1');
-        setNotice(false);
+        writeDevice(
+          notice === 'notifications'
+            ? DEVICE_KEYS.notificationsNoticeDismissed
+            : DEVICE_KEYS.installNoticeDismissed,
+          '1',
+        );
+        setNotice(null);
       }}
       onOpenActivity={() => navigate('/activity')}
       onOpenOccurrence={nav.openEvent}

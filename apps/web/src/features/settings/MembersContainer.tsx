@@ -42,7 +42,27 @@ export function MembersContainer() {
       members={toAdminMemberVMs(members, me.id)}
       onAdd={(input) => void send('POST', '/api/members', input)}
       onBack={() => navigate('/settings')}
-      onRevokeDevices={() => {}}
+      onRevokeDevices={(id) => {
+        // 端末をなくしたとき: その人の全端末への通知を止める（§18 T9）
+        void (async () => {
+          if (
+            await sendOnline(
+              store,
+              showToast,
+              'DELETE',
+              `/api/members/${id}/push-subscriptions`,
+              {},
+            )
+          ) {
+            showToast({
+              kind: 'info',
+              message: 'その人の端末への通知を止めました',
+              actionLabel: null,
+            });
+            await load();
+          }
+        })();
+      }}
       onUpdate={(id, patch) => void send('PATCH', `/api/members/${id}`, patch)}
     />
   );

@@ -1,6 +1,7 @@
+import type { ReminderPrefDTO } from '@ito/core';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { useState } from 'react';
-import { useData, useMembers } from '../../app/data-context';
+import { useData, useMe, useMembers, useMeta } from '../../app/data-context';
 import { useMemberVMs, useOffline } from '../../app/hooks';
 import { mapUrl } from '../../app/maps';
 import { useNav } from '../../app/nav';
@@ -19,6 +20,7 @@ import { applyDraftPatch } from '../../viewmodels/composer';
 import { QUICK_TIMES, quickDates, saveLabelFor } from '../../viewmodels/composer-vm';
 import { buildDetail, draftToInput, eventToDraft, findOccurrence } from '../../viewmodels/detail';
 import { toOccurrenceVM } from '../../viewmodels/occurrence';
+import { myReminders } from '../../viewmodels/reminders';
 import {
   lostCounts,
   occurrenceChanges,
@@ -57,6 +59,8 @@ export function EventDetailContainer() {
   const setConflictOpen = (open: boolean) => setConflictFor(open ? eventId : null);
   const scope = scopeState && scopeState.eventId === eventId ? scopeState : null;
   const offline = useOffline();
+  const me = useMe();
+  const prefs = useMeta<ReminderPrefDTO[]>('myReminderPrefs');
 
   const data = useLiveQuery(async () => {
     if (!eventId) return null;
@@ -86,7 +90,11 @@ export function EventDetailContainer() {
   const seriesId = occ.seriesId;
   const conflict = data.conflict;
   // 競合中は解決するまで編集・複製・削除を出さない（自分の変更が黙って消えないように。§24 D28）
-  const built = buildDetail(occ, ctx, allMembers);
+  // 自分への通知（本人の行、なければ担当者に既定値。シリーズは親の ID で持つ。§15）
+  const reminders = me
+    ? myReminders(occ.event, seriesId, me.id, prefs, me.settings.notifications)
+    : { myReminders: [], reminderOptions: [] };
+  const built = buildDetail(occ, ctx, allMembers, reminders.myReminders, reminders.reminderOptions);
   const detail = conflict ? { ...built, canEdit: false } : built;
 
   // 繰り返しの回（§11）: 編集・削除のたびに範囲を選ぶ（C-04）
@@ -219,7 +227,7 @@ export function EventDetailContainer() {
     <EventDetailSheet
       detail={detail}
       members={members}
-      onChangeReminders={() => {}}
+      onChangeReminders={(offsets) => void store.setMyReminders(seriesId, offsets)}
       onClose={nav.closeEvent}
       onDelete={remove}
       onDuplicate={() => nav.openComposer({ duplicate: seriesId })}

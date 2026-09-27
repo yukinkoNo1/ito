@@ -1,5 +1,5 @@
 # 進み具合
-今: Phase 4（通知） / 次にやること: 退避した Phase 4 の作業中の変更（git stash「phase4-wip」。購読・スケジューラ・SW の push・設定の画面）を戻す → マイグレーションの番号を 0004 に → 受け入れ基準 → レビュー → phase-4
+今: Phase 4（通知） / 次にやること: レビュー → 指摘を直す → phase-4 → Phase 5（一言入力）
 
 ## ステップ
 | ステップ | 状態（未着手・作業中・完了） | タグ | メモ |
@@ -9,7 +9,7 @@
 | Phase 2 PWA とローカルファースト | 完了 | phase-2 | レビューの指摘（ログアウトで SW の登録が残る、SW を通る遷移のテスト、競合中の編集で自分の変更が消える、送らずに戻した変更のあとの取得、429 の待ち、426 の更新、時計の巻き戻し ほか）を直した |
 | Phase 6 UI 統合 | 完了 | phase-6 | Phase 2 の次に行った（§24 D15）。レビューの指摘（シートのスワイプ、テーマの監視の漏れ、自分の非公開の候補、書く画面の日時の範囲、トースト・案内、履歴・ゴミ箱の状態、人の札が 7 個以上、日付をまたぐ行、検査の範囲 ほか）を直した |
 | Phase 3 繰り返し | 完了 | phase-3 | レビューの指摘（件名だけ直してもシリーズが動く、C-04 の件数とサーバーの食い違い、リセットした例外の復活、毎月の規則のずれ、回が出ない規則、pnpm dev が rrule の読み込みで起動しない、回の送信待ちの 409 ほか）を直した（§24 D34） |
-| Phase 4 通知 | 未着手 | phase-4 | |
+| Phase 4 通知 | 作業中 | phase-4 | |
 | Phase 5 一言入力 | 未着手 | phase-5 | |
 | Phase 7 仕上げ | 未着手 | phase-7 | |
 | 総点検 | 未着手 | audit | |
@@ -88,6 +88,16 @@
 | Phase 3 | 画面（書く画面の繰り返し・C-04・オフラインの制限） | E2E phase3.spec.ts（書く画面で毎週・10 回 → この予定だけの時刻 → この予定だけ削除 → これ以降すべて（消える 2 件を C-04 に表示）→ すべて）、「オフラインでは…選べない」、web phase3.test.ts（送信待ち・範囲の計算・月末の問い） | OK |
 | Phase 3 | レビューの指摘（§24 D34） | core series.test.ts・recurrence.test.ts、server recurrence.test.ts「Phase 3 のレビューの指摘」・esm-load.test.ts（本物の Node で @ito/core・アプリ・CLI を読み込む）、web phase3.test.ts「範囲（C-04）の計算」「繰り返しの回の送信待ち（Phase 3 のレビュー）」、E2E phase3（件名だけの「これ以降」は元の回の 7:30 から） | OK |
 | Phase 3 | `pnpm check`・`pnpm test:e2e`・`docker compose build`・`pnpm dev` | `pnpm check`（Biome＋tsc＋Vitest 385 件）、`pnpm test:e2e`（41 件）、`docker compose build`、`node scripts/check-dev.mjs`（/healthz・/・/api/me が 200） | OK（すべて EXIT=0） |
+| Phase 4 | §21 の通知のテスト一式（開始時・当日 7:00・前日 20:00／同じ回は二度送らない／動かしたら新しい時刻で送る／5xx のあと 10 分以内に再送・過ぎたら諦める／朝のまとめと前夜の予告が両方届く／静かな時間と 2 分まとめ） | server test/notify.test.ts（偽の時計と記録するだけの送信）「予定の通知」「朝のまとめ・前夜の予告」「家族の変更」、core test/notify.test.ts（通知の時刻・送る範囲・静かな時間・キー） | OK |
+| Phase 4 | 非公開の通知文（持ち主以外は「予定あり」） | server notify.test.ts「非公開: 持ち主には件名で送り…」「朝のまとめ…（10:00 予定あり）」「持ち主は自分の非公開の件名をまとめで見られる」「mine は…他人の非公開は「予定あり」」 | OK |
+| Phase 4 | メンバー無効化で購読が消える | server notify.test.ts「無効化したメンバーには送らない（購読も消える）」「削除は本人と管理者だけ…」 | OK |
+| Phase 4 | 購読 API（端末の一覧・削除・管理者の一括削除・endpoint を返さない）、テスト通知、TTL と urgency、ロック画面の表示、404/410・fail_count、再起動後の 10 分 | server notify.test.ts「購読の API」「予定の通知」、E2E phase4.spec.ts「設定: 通知を受け取る端末の一覧から止められる…」「家族の管理: この人の端末の通知を止める」 | OK |
+| Phase 4 | 起動・前面復帰の購読の確認と再購読、最初の await が requestPermission、ログアウトで購読を解除 | web test/phase4.test.ts「購読（§15）」、logout.test.ts | OK |
+| Phase 4 | SW の push（showNotification の前に await を置かない・読めない中身でも出す・url は同一オリジンのパスだけ）・バッジ | web phase4.test.ts「SW の push の中身」、E2E phase4-push.spec.ts（DevTools の deliverPushMessage で届けて getNotifications で確かめる） | OK |
+| Phase 4 | ホームの案内（F-23 のうち通知）と iPhone の未インストールの分岐 | web phase4.test.ts「ホームの案内（F-23 のうち通知）と通知の許可の状態」 | OK |
+| Phase 4 | reminder_prefs と既定値（詳細・書く画面の自分への通知） | E2E phase4.spec.ts「詳細の「自分への通知」で選ぶと保存され…」、web phase4.test.ts「自分への通知の保存」「端末の一覧・自分への通知の VM」 | OK |
+| Phase 4 | 実機確認の手順を README に | README「通知（Web Push。SPEC §15）」の「実機での確認の手順」 | OK（実機での確認は「要確認」） |
+| Phase 4 | `pnpm check`・`pnpm test:e2e`・`docker compose build`・`up -d --wait` | `pnpm check`（Vitest 444 件）、`pnpm test:e2e`（45 件）、`docker compose build`・`up -d --wait`（healthz 200、ログに push disabled が出ない＝鍵で push が有効）・`down` | OK（すべて EXIT=0） |
 | Phase 6 | `pnpm check`・`pnpm test:e2e`・`pnpm build`・`docker compose build` | `pnpm check`（261 件）、`pnpm test:e2e`（39 件）、`pnpm build`、`docker compose build` | OK（すべて EXIT=0） |
 
 ## 決めたこと（SPEC §24 に書いたもの）
@@ -111,13 +121,17 @@
 - D32: Phase 6 のレビューで決めた画面の細則（見出しの年、まとめの④はボタンだけ、無効の家族だけの回は出さない、スワイプはつまみ・見出しから、テーマの追従は 1 か所、書く画面のほかの日・時刻、履歴・ゴミ箱の状態 ほか）
 - D33: 繰り返しの細則（例外行の key、If-Match は親、exceptionId、RRULE の制限と正規化、消える件数、この回だけ削除の取り消し、reminder_prefs の複製、C-04 のオフライン）
 - D34: Phase 3 のレビューで決めた繰り返しの細則（差分だけを送る、消える件数の共通の計算、破棄した例外行は消す、毎月の規則の移動、RRULE の並びと比べ方、この回だけ変更の元に戻す、回の送信待ちの 409・404、「この予定だけ」の制限、保存したあとの回へ移る、rrule の ESM）
+- D35: 通知の細則（この端末の印、送信の記録と再送、まとめ・予告、家族の変更のまとめ待ち、通知の文と url、テスト通知、鍵がないとき、自分への通知の候補と保存、SW の知らせ、E2E の push）
 
 ## 後で足すテスト
-- 非公開の漏えい（まだない経路）: 書き出し（JSON・ICS。Phase 7）、Push の文面（Phase 4）、朝のまとめ・前夜の予告（Phase 4）、一言入力の重なりの警告（Phase 5。端末内で作るので他人の非公開は「予定あり」になることを確かめる）、検索（Phase 7。端末内の DB を検索する）
+- 非公開の漏えい（まだない経路）: 書き出し（JSON・ICS。Phase 7）、一言入力の重なりの警告（Phase 5。端末内で作るので他人の非公開は「予定あり」になることを確かめる）、検索（Phase 7。端末内の DB を検索する）
 - T7 のビルド成果物の検査（sk-ant）に「X-Dev-Login」「ito.devLogin」「表示する状態」「__gallery」を足す（Phase 7）
 - これからの一覧の範囲を、見ている日の前後 8 週に削る（今は広げるだけ。§19 の性能の確認と合わせて Phase 7）
 
 ## 要確認（持ち主がやること・確かめてほしいこと。根拠の出力も）
+- **通知の実機での確認**（iPhone でホーム画面に追加 → 通知オン → テスト通知 → 5 分後の予定の通知 → 1 日アプリを開かなくても翌朝のまとめ）。実機と本物の Push サービス（Apple）が要るので、持ち主の作業。
+  - 根拠: 手元の確認は偽の送信（server notify.test.ts）と、ブラウザの SW に DevTools で push を届ける E2E（phase4-push.spec.ts）まで。E2E のサーバーには VAPID の鍵を置いていない（本物の Push サービスに送らないため）。Docker では開発用の鍵で push が有効になることを確かめた（ログに push disabled が出ない）
+  - 持ち主がやること: 本番の `app.env` に VAPID の鍵と `VAPID_SUBJECT`（mailto: か https:）を書き、README「通知（Web Push）」の「実機での確認の手順」を行う
 - **Node.js 24 LTS が開発機に入っていない**（管理者権限のインストールは持ち主の作業）。手元の開発・テストは Node 22 で行い、本番のイメージ（node:24-slim）では 24 で動くことを docker compose で確かめている（§24 D19）。
   - 根拠: `node -v` → `v22.21.0`（C:\Program Files\nodejs）。`pnpm` はコマンドとしては無い（`pnpm: command not found`）
   - 持ち主がやること: Node 24 LTS を入れる（入れたあと `pnpm install` をやり直す）。pnpm は corepack で使える（`corepack enable pnpm`、または README のとおりリポジトリ内に shim）

@@ -18,6 +18,7 @@ import { readThemeSetting, setTheme } from './appearance';
 import { DataProvider, useMe } from './data-context';
 import { FreshProvider } from './fresh';
 import { NavProvider, useNav } from './nav';
+import { PushSync } from './push-sync';
 import { ToastProvider } from './toast';
 import { UpdateContext } from './update';
 import { ViewDateProvider } from './view-date';
@@ -93,6 +94,7 @@ export function App() {
             <ViewDateProvider>
               <BrowserRouter>
                 <NavProvider>
+                  <PushSync />
                   <AppRoutes />
                 </NavProvider>
               </BrowserRouter>

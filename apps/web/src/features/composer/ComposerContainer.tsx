@@ -1,3 +1,4 @@
+import type { MeDTO, ReminderPrefDTO } from '@ito/core';
 import { useEffect, useState } from 'react';
 import { useData, useEvents, useSyncState } from '../../app/data-context';
 import { useMemberVMs, useOffline } from '../../app/hooks';
@@ -11,6 +12,7 @@ import type { ComposerVM, EventDraftVM } from '../../ui/types';
 import { applyDraftPatch } from '../../viewmodels/composer';
 import { buildComposerVM, monthEndQuestion } from '../../viewmodels/composer-vm';
 import { draftToInput, emptyDraft, eventToDraft } from '../../viewmodels/detail';
+import { draftDefaults, prefOf } from '../../viewmodels/reminders';
 import {
   lostCounts,
   occurrenceChanges,
@@ -34,6 +36,12 @@ interface ComposerState {
   monthEnd: number | null;
   /** 保存のときに C-04 で範囲を聞いている */
   askScope: boolean;
+  /** 自分への通知を触ったか。触っていなければ、担当・終日の変更に合わせて既定値に追従する */
+  remindersTouched: boolean;
+  /** 開いたときの本人の通知の行（直すときだけ。なければ既定値に追従） */
+  reminderPref: number[] | undefined;
+  /** 本人の既定値（§15 の設定） */
+  reminderDefaults: { timedDefaults: number[]; allDayDefaults: number[] };
 }
 
 /**
@@ -55,6 +63,7 @@ export function ComposerContainer() {
   // ctx は毎分変わるので、開いたとき・開き方が変わったときだけ下書きを作る（今日と自分の ID だけを見る）
   const today = ctx?.today ?? null;
   const meId = ctx?.meId ?? null;
+  const editing = Boolean(params?.editId);
   const sourceId = params?.editId ?? params?.duplicateId ?? null;
   const date = params?.date ?? null;
   const time = params?.time ?? null;
@@ -70,16 +79,28 @@ export function ComposerContainer() {
     let cancelled = false;
     void (async () => {
       const source = sourceId ? await db.events.get(sourceId) : undefined;
+      const me = await db.getMeta<MeDTO>('me');
+      const prefs = await db.getMeta<ReminderPrefDTO[]>('myReminderPrefs');
       // 繰り返しの回を直すとき: その回の今の中身（例外行、なければ親をその回に置いたもの）に、親の繰り返しを付ける
       const overrides =
         source && rid ? await db.events.where('parentId').equals(source.id).toArray() : [];
       if (cancelled) return;
       const base = source && rid ? occurrenceEvent(source, overrides, rid) : null;
-      const draft = source
+      const made = source
         ? base
           ? { ...eventToDraft(base), ...recurrenceDraft(source) }
           : eventToDraft(source)
         : { ...emptyDraft(date ?? today, meId, time), title: text ?? '' };
+      // 自分への通知: 直すときは本人の行（なければ既定値）、書く・複製は既定値（§15）
+      const reminderDefaults = me?.settings.notifications ?? {
+        timedDefaults: [],
+        allDayDefaults: [],
+      };
+      const reminderPref = editing && source ? prefOf(prefs, source.id) : undefined;
+      const draft = {
+        ...made,
+        myReminders: reminderPref ?? draftDefaults(made, meId, reminderDefaults),
+      };
       setState({
         key,
         text: draft.title,
@@ -91,12 +112,15 @@ export function ComposerContainer() {
         base,
         monthEnd: null,
         askScope: false,
+        remindersTouched: false,
+        reminderPref,
+        reminderDefaults,
       });
     })();
     return () => {
       cancelled = true;
     };
-  }, [key, sourceId, date, time, text, more, rid, db, today, meId]);
+  }, [key, sourceId, editing, date, time, text, more, rid, db, today, meId]);
 
   if (!params || !state || state.key !== key || !ctx) return null;
   const editId = params.editId;
@@ -121,11 +145,20 @@ export function ComposerContainer() {
     setState((s) => {
       if (!s) return s;
       const busyTouched = s.busyTouched || patch.busy !== undefined;
-      const draft = applyDraftPatch(s.draft, patch, { busyTouched });
+      const remindersTouched = s.remindersTouched || patch.myReminders !== undefined;
+      const patched = applyDraftPatch(s.draft, patch, { busyTouched });
+      // 触っていなければ、終日・担当の変更に合わせて既定値に追従する
+      const draft = remindersTouched
+        ? patched
+        : {
+            ...patched,
+            myReminders: s.reminderPref ?? draftDefaults(patched, meId ?? '', s.reminderDefaults),
+          };
       return {
         ...s,
         draft,
         busyTouched,
+        remindersTouched,
         text: patch.title !== undefined ? patch.title : s.text,
         error: null,
       };
@@ -146,8 +179,12 @@ export function ComposerContainer() {
     // 送るのは回の今の中身との差分だけ（日時は変えたときだけ。store が取る。§24 D34）
     const r = await store.updateOccurrence(editId, seriesRid, scope, draftToInput(state.draft));
     if (!r.ok) return fail(r.errors.map((e) => e.message).join('。'));
-    // 下に詳細が開いていて、保存で回が変わったら（日時を動かした・「これ以降」）、詳細をその回に移す
     const t = r.target;
+    // 自分への通知は、保存したあとのシリーズに（「これ以降」なら新しいシリーズ）
+    if (state.remindersTouched) {
+      void store.setMyReminders(t?.eventId ?? editId, state.draft.myReminders);
+    }
+    // 下に詳細が開いていて、保存で回が変わったら（日時を動かした・「これ以降」）、詳細をその回に移す
     if (nav.detail && t && (t.eventId !== editId || t.recurrenceId !== seriesRid)) {
       nav.replaceEvent(`${t.eventId}@${t.recurrenceId}`);
     } else {
@@ -173,6 +210,7 @@ export function ComposerContainer() {
       // 全部の項目を送る（手元で今の予定との差だけにする。サーバーは今の予定に当てて検証する）
       const r = await store.updateEvent(editId, input);
       if (!r.ok) return fail(r.errors.map((e) => e.message).join('。'));
+      if (state.remindersTouched) void store.setMyReminders(editId, state.draft.myReminders);
       nav.closeComposer();
       toast.show({
         kind: 'undo',
@@ -184,6 +222,8 @@ export function ComposerContainer() {
     }
     const r = await store.createEvent(input);
     if (!r.ok) return fail(r.errors.map((e) => e.message).join('。'));
+    // 既定値のままなら行を作らない（既定値を変えたら新しい既定値に従う）
+    if (state.remindersTouched) void store.setMyReminders(r.value.id, state.draft.myReminders);
     nav.closeComposer();
     toast.show({
       kind: 'undo',
