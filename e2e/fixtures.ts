@@ -24,13 +24,17 @@ export async function watchProblems(page: Page): Promise<PageProblems> {
   return problems;
 }
 
+/** problems は auto: すべてのテストで CSP 違反とコンソールエラーが 0 件であることを確かめる */
 export const test = base.extend<{ problems: PageProblems }>({
-  problems: async ({ page }, use) => {
-    const problems = await watchProblems(page);
-    await use(problems);
-    expect(problems.cspViolations, 'CSP 違反').toEqual([]);
-    expect(problems.consoleErrors, 'コンソールエラー').toEqual([]);
-  },
+  problems: [
+    async ({ page }, use) => {
+      const problems = await watchProblems(page);
+      await use(problems);
+      expect(problems.cspViolations, 'CSP 違反').toEqual([]);
+      expect(problems.consoleErrors, 'コンソールエラー').toEqual([]);
+    },
+    { auto: true },
+  ],
 });
 
 export { expect };

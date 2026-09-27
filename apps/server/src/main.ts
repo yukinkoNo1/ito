@@ -1,13 +1,10 @@
+import './zod-setup';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { systemClock } from '@ito/core';
-import { z } from 'zod';
 import { EnvError, loadEnv } from './env';
 import { createLogger } from './logger';
 import { startServer } from './runtime';
-
-// zod 4 が CSP の下で new Function を試さないように（SPEC §8）
-z.config({ jitless: true });
 
 // このファイルは src/main.ts（開発）と dist/server.js（バンドル）のどちらでもパッケージ直下の 1 つ下にある
 const here = path.dirname(fileURLToPath(import.meta.url));

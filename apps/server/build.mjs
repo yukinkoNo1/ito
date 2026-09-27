@@ -1,5 +1,6 @@
 // サーバーと CLI をそれぞれ 1 ファイルにバンドルする（@ito/core を含む。外部に残すのは better-sqlite3 だけ。SPEC §20）
 import { rm } from 'node:fs/promises';
+import { fileURLToPath } from 'node:url';
 import { build } from 'esbuild';
 
 await rm(new URL('./dist', import.meta.url), { recursive: true, force: true });
@@ -22,7 +23,7 @@ const common = {
   banner: { js: banner },
   legalComments: 'none',
   logLevel: 'warning',
-  absWorkingDir: new URL('.', import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1'),
+  absWorkingDir: fileURLToPath(new URL('.', import.meta.url)),
 };
 
 await build({ ...common, entryPoints: ['src/main.ts'], outfile: 'dist/server.js' });

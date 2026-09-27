@@ -67,6 +67,12 @@ export function createApp(deps: AppDeps): App {
     );
   });
   app.use('*', securityHeaders());
+  // すべての API 応答に Cache-Control: no-store（§13）。Host 検査（421）や本文の上限（413）の応答にも付くよう、その前に置く
+  app.use('*', async (c, next) => {
+    await next();
+    if (c.req.path === '/api' || c.req.path.startsWith('/api/'))
+      c.res.headers.set('Cache-Control', 'no-store');
+  });
   app.use('*', hostCheck(env.APP_HOST));
   app.use(
     '*',
@@ -85,12 +91,6 @@ export function createApp(deps: AppDeps): App {
       c.header('Cache-Control', 'no-store');
       return c.json({ ok: false }, 503);
     }
-  });
-
-  // すべての API 応答に Cache-Control: no-store（SPEC §13）
-  app.use('/api/*', async (c, next) => {
-    await next();
-    c.res.headers.set('Cache-Control', 'no-store');
   });
 
   // 人の API: プロトコル版 → CSRF → identity。/api/feed/* には掛けない

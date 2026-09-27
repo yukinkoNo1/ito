@@ -92,6 +92,18 @@ describe('identity（SPEC §14）', () => {
     expect(row?.name).toBe(`${'あ'.repeat(19)}2`);
   });
 
+  it('切り詰めたあとの名前の前後に空白を残さない', () => {
+    ctx = createTestContext(tailscaleEnv());
+    const row = autoRegisterAdmin(
+      ctx.database.db,
+      ctx.clock,
+      6,
+      'admin@example.com',
+      `${'あ'.repeat(19)} い`,
+    );
+    expect(row?.name).toBe('あ'.repeat(19));
+  });
+
   it('上限（MAX_MEMBERS）に達していたら自動登録しない', async () => {
     ctx = createTestContext(tailscaleEnv({ MAX_MEMBERS: '1' }));
     addMember(ctx, 'someone@example.com', 'だれか', 'yamabuki');
@@ -280,6 +292,40 @@ describe('ヘッダ・本文の上限', () => {
     ).toBe('no-store');
     expect((await send(ctx, 'GET', '/api/me')).headers.get('cache-control')).toBe('no-store');
     expect((await send(ctx, 'GET', '/healthz')).headers.get('cache-control')).toBe('no-store');
+    // Host 不一致（421）と本文の上限（413）の API 応答にも付く
+    const misdirected = await send(ctx, 'GET', '/api/me', {
+      host: 'evil.example',
+      headers: tsUser('mama@example.com'),
+    });
+    expect(misdirected.status).toBe(421);
+    expect(misdirected.headers.get('cache-control')).toBe('no-store');
+    const big = JSON.stringify({ text: 'x'.repeat(33 * 1024) });
+    const tooLarge = await send(ctx, 'POST', '/api/me', {
+      headers: tsUser('mama@example.com'),
+      body: big,
+    });
+    expect(tooLarge.status).toBe(413);
+    expect(tooLarge.headers.get('cache-control')).toBe('no-store');
+  });
+
+  it('identity と CSRF は /api/feed/* に掛けない（境目: /api/feedx・/api/feed-x には掛ける）', async () => {
+    ctx = createTestContext(tailscaleEnv());
+    // /api/feed/* は ID ヘッダも CSRF のヘッダもなしで identity・CSRF に止められない
+    const feed = await send(ctx, 'GET', '/api/feed/display');
+    expect(((await feed.json()) as { code: string }).code).not.toBe('no_identity');
+    const feedPost = await send(ctx, 'POST', '/api/feed/display', { csrf: false });
+    expect(((await feedPost.json()) as { code: string }).code).not.toBe('csrf');
+    for (const p of ['/api/feedx', '/api/feed-x', '/api/feeds/display']) {
+      const res = await send(ctx, 'GET', p);
+      expect(res.status).toBe(401);
+      expect(((await res.json()) as { code: string }).code).toBe('no_identity');
+    }
+    // /api/feed/* でも Host 検査とセキュリティヘッダは掛かる
+    const misdirected = await send(ctx, 'GET', '/api/feed/display', { host: 'evil.example' });
+    expect(misdirected.status).toBe(421);
+    expect(misdirected.headers.get('content-security-policy')).toBe(
+      SECURITY_HEADERS['Content-Security-Policy'],
+    );
   });
 
   it('本文が 32KB を超えたら 413', async () => {

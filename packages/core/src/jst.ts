@@ -19,6 +19,10 @@ export const DAY_MS = 24 * HOUR_MS;
 const DATE_RE = /^(\d{4})-(\d{2})-(\d{2})$/;
 const TIME_RE = /^([01]\d|2[0-3]):([0-5]\d)$/;
 
+/** 扱う年の範囲 */
+export const MIN_YEAR = 1900;
+export const MAX_YEAR = 2999;
+
 export const WEEKDAY_LABELS = ['日', '月', '火', '水', '木', '金', '土'] as const;
 
 export interface JstParts {
@@ -47,7 +51,8 @@ export function isValidDate(value: string): boolean {
   const y = Number(m[1]);
   const mo = Number(m[2]);
   const d = Number(m[3]);
-  if (mo < 1 || mo > 12 || d < 1) return false;
+  // Date.UTC は 0〜99 年を 1900 年代として扱うので、扱う年を絞る
+  if (y < MIN_YEAR || y > MAX_YEAR || mo < 1 || mo > 12 || d < 1) return false;
   return d <= daysInMonth(y, mo);
 }
 
@@ -85,7 +90,9 @@ export function todayJst(nowMs: number): DateISO {
 
 export function parseDate(date: DateISO): { year: number; month: number; day: number } {
   const m = DATE_RE.exec(date);
-  if (!m) throw new RangeError(`日付の形式が正しくありません: ${date}`);
+  if (!m || Number(m[1]) < MIN_YEAR || Number(m[1]) > MAX_YEAR) {
+    throw new RangeError(`日付の形式が正しくありません: ${date}`);
+  }
   return { year: Number(m[1]), month: Number(m[2]), day: Number(m[3]) };
 }
 
@@ -183,6 +190,7 @@ export function parseIsoToMs(value: string): number | null {
   if (tz !== 'Z') {
     const sign = tz.startsWith('-') ? -1 : 1;
     const [oh, om] = tz.slice(1).split(':').map(Number) as [number, number];
+    if (oh > 23 || om > 59) return null;
     offsetMin = sign * (oh * 60 + om);
   }
   const { year, month, day } = parseDate(date);

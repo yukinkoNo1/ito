@@ -20,3 +20,9 @@ deploy/compose.override.yaml
 **/*.db-wal
 **/*.db-shm
 apps/server/public
+**/.env
+**/.env.*
+!**/.env.example
+coverage
+**/*.tsbuildinfo
+.claude

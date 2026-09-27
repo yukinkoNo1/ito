@@ -1,6 +1,4 @@
-import { z } from 'zod';
-
-z.config({ jitless: true });
+import './zod-setup';
 
 const HELP = `いと の管理用 CLI
 

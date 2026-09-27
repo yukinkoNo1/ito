@@ -66,5 +66,13 @@ describe('jst（SPEC §11）', () => {
     expect(isValidTime('24:00')).toBe(false);
     expect(isValidTime('07:30')).toBe(true);
     expect(isValidTime('7:30')).toBe(false);
+    // Date.UTC が 1900 年代として扱う 0〜99 年や、扱わない遠い年は受け付けない
+    expect(isValidDate('0099-01-01')).toBe(false);
+    expect(isValidDate('1899-12-31')).toBe(false);
+    expect(isValidDate('3000-01-01')).toBe(false);
+    expect(parseIsoToMs('0050-01-01T00:00:00Z')).toBeNull();
+    // オフセットは hh≤23・mm≤59
+    expect(parseIsoToMs('2026-10-03T07:00:00+99:99')).toBeNull();
+    expect(parseIsoToMs('2026-10-03T07:00:00+24:00')).toBeNull();
   });
 });

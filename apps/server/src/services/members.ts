@@ -62,11 +62,12 @@ export function isColorTaken(db: DbLike, color: string, exceptId?: string): bool
  * 名前がほかの有効なメンバーとぶつかったら、20 文字に収まるように末尾に 2, 3… を付ける（RUNBOOK 3.・SPEC §24 D17）
  */
 export function uniqueName(base: string, taken: ReadonlySet<string>): string {
-  const name = truncateGraphemes(normalizeText(base), NAME_MAX);
+  // 切り詰めたあとにも前後の空白を除く（比べるときの正規化と合わせる）
+  const name = normalizeText(truncateGraphemes(normalizeText(base), NAME_MAX));
   if (!taken.has(name)) return name;
   for (let n = 2; ; n++) {
     const suffix = String(n);
-    const head = truncateGraphemes(name, NAME_MAX - suffix.length);
+    const head = normalizeText(truncateGraphemes(name, NAME_MAX - suffix.length));
     const candidate = `${head}${suffix}`;
     if (!taken.has(candidate)) return candidate;
   }

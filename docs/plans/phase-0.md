@@ -35,7 +35,8 @@
 | 静的配信（PWA） | ○ | ○ | ○ | 資産は長期キャッシュ、index.html・sw.js は no-cache | ○ | × | × | × | × |
 
 - エラーはすべて problem+json（onError・notFound で組み立てる）。セキュリティヘッダはエラー応答にも付く（外側のミドルウェアが next() のあとに付ける）
-- identity は `/api/*` のうち `/api/feed/` で始まらないものだけに掛ける（Hono のサブアプリを分ける）
+- identity は `/api/*` のうち `/api/feed` と `/api/feed/…` 以外にだけ掛ける（app.ts の isFeedPath で分けるミドルウェア。サブアプリの use('*') は親の全経路に広がるため、サブアプリでは分けない）
+- Cache-Control: no-store は Host 検査・本文の上限より前に置き、421・413 の API 応答にも付ける（レビューの指摘）
 
 ## テスト
 - server: env の起動時検査（HOST=0.0.0.0・http の APP_ORIGIN・dev＋production で失敗）、ヘッダなし 401、未登録 403、無効 403、管理者の自動登録（名前の衝突で 2 を付ける・色は未使用の最初の色）、CSRF 4 パターン（X-Ito-Client なし・Content-Type 違い・Origin 不一致・Sec-Fetch-Site: cross-site）で 403、GET には CSRF が掛からない、Host 不一致 421、/healthz は Host に関係なく 200、セキュリティヘッダが全応答（エラーを含む）に付く、本文 32KB 超は 413、X-Dev-Login は dev モードだけで効く
@@ -49,3 +50,14 @@
 - 管理者の自動登録の名前の衝突と色（RUNBOOK 3.） → §24 D18
 - better-sqlite3 13 はビルド済みのバイナリを同梱する（gypfile: false）が、pnpm 10 が node-gyp を走らせて失敗する（Visual Studio がない）ため、`ignoredBuiltDependencies` に入れてビルドスクリプトを動かさない
 - react-router は 7 系（8 系は Node >=22.22 を要求するため）
+
+## レビューで直したこと（Phase 0）
+- apps/web/dist-e2e がコミットされていた → .gitignore に足して追跡から外した
+- z.config({ jitless: true }) がスキーマの import より後に動いていた → 入口の最初の import にする zod-setup.ts を作った（サーバー・CLI・PWA）。new Function を呼ばないことをテストで確かめる
+- /api の 421・413 に no-store が付いていなかった → 順番を直してテストを足した
+- 自動登録の名前の切り詰めのあとに空白が残りうる → 切り詰めたあとも正規化
+- jst が 0〜99 年を受け付けていた（Date.UTC が 1900 年代にする）・オフセットの範囲を見ていなかった → 1900〜2999 年に限り、オフセットは hh≤23・mm≤59
+- build.mjs の作業フォルダが URL エンコードのままだった → fileURLToPath
+- E2E の problems フィクスチャを auto にした（すべてのテストで CSP 違反・コンソールエラー 0 件）
+- .dockerignore を .gitignore の秘密情報のパターンとそろえた
+- 却下した指摘: CLI の runCli を import できない（Phase 1 で入口と中身を分けた）

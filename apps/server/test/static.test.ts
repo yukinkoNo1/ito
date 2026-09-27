@@ -2,7 +2,8 @@ import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { createTestContext, send, type TestContext, tailscaleEnv } from './helpers';
+import { members } from '../src/db/schema';
+import { createTestContext, send, type TestContext, tailscaleEnv, tsUser } from './helpers';
 
 const root = fileURLToPath(new URL('../../../.data/test-tmp/static', import.meta.url));
 let ctx: TestContext;
@@ -44,9 +45,35 @@ describe('静的配信（SPEC §20）', () => {
   });
 
   it('/api/* と /healthz は index.html にしない（/api/export へのページ遷移も）', async () => {
-    const res = await send(ctx, 'GET', '/api/export', { headers: { accept: 'text/html' } });
-    expect(res.status).toBe(401);
-    expect(res.headers.get('content-type')).toContain('application/problem+json');
+    // 登録済みのメンバーとして（identity を通ったあとでも静的配信に落ちない）
+    const now = ctx.clock.now();
+    ctx.database.db
+      .insert(members)
+      .values({
+        id: '0192f5a0-1c00-7000-8000-000000000001',
+        login: 'mama@example.com',
+        name: 'お母さん',
+        mark: '母',
+        color: 'wakatake',
+        aliases: '[]',
+        role: 'member',
+        settings: '{}',
+        activityReadAt: 0,
+        createdAt: now,
+        updatedAt: now,
+        disabledAt: null,
+      })
+      .run();
+    for (const p of ['/api/export', '/api', '/api/nothing/here']) {
+      const res = await send(ctx, 'GET', p, {
+        headers: { accept: 'text/html', ...tsUser('mama@example.com') },
+      });
+      expect(res.status).toBe(404);
+      expect(res.headers.get('content-type')).toContain('application/problem+json');
+      expect(await res.text()).not.toContain('<title>');
+    }
+    const health = await send(ctx, 'GET', '/healthz', { headers: { accept: 'text/html' } });
+    expect(await health.json()).toEqual({ ok: true });
   });
 
   it('ルートの外のファイルは読めない', async () => {
