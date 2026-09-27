@@ -176,12 +176,10 @@ export function draftToInput(d: EventDraftVM): EventCreateInput {
   const startAt = `${d.startDate}T${startTime}:00+09:00`;
   let endAt: string | null = null;
   if (d.endTime) {
-    const endDate =
-      d.endDate > d.startDate
-        ? d.endDate
-        : d.endTime <= startTime
-          ? addDays(d.startDate, 1)
-          : d.startDate;
+    // 時刻ありの予定は開始日の翌日までに終わる（§10）。終わりの時刻が始まり以前なら翌日、
+    // 明示的に翌日を選んでいれば翌日、それ以外は同じ日（開始日を動かしたあとの古い終わりの日は使わない）
+    const nextDay = addDays(d.startDate, 1);
+    const endDate = d.endTime <= startTime || d.endDate === nextDay ? nextDay : d.startDate;
     endAt = `${endDate}T${d.endTime}:00+09:00`;
   }
   return { ...base, allDay: false, startAt, endAt };

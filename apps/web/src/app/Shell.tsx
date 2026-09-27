@@ -1,13 +1,17 @@
+import { useLiveQuery } from 'dexie-react-hooks';
 import type { ReactNode } from 'react';
 import { Link, useLocation, useSearchParams } from 'react-router';
 import { useData, useSyncState } from './data-context';
 import { useToast } from './toast';
+import { useUpdate } from './update';
 
 /** 素朴な AppShell（Phase 6 で本番の UI に差し替える） */
 export function Shell({ children }: { children: ReactNode }) {
   const sync = useSyncState();
-  const { store } = useData();
+  const { store, db } = useData();
   const toast = useToast();
+  const applyUpdate = useUpdate();
+  const pending = useLiveQuery(() => db.outbox.count(), [db]) ?? 0;
   const [params, setParams] = useSearchParams();
   const location = useLocation();
 
@@ -35,6 +39,19 @@ export function Shell({ children }: { children: ReactNode }) {
               onClick={() => void store.syncNow({ retryNow: true })}
             >
               再試行
+            </button>
+          </p>
+        )}
+        {pending > 0 && !syncLine && (
+          <p role="status" className="text-sm">
+            未送信 {pending}件
+          </p>
+        )}
+        {applyUpdate && (
+          <p role="status" className="flex items-center justify-between gap-2 text-sm">
+            <span>新しいバージョンがあります</span>
+            <button type="button" className="min-h-11 px-3 font-bold" onClick={applyUpdate}>
+              更新
             </button>
           </p>
         )}

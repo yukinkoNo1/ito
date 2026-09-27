@@ -1,4 +1,4 @@
-import { type Clock, type MeDTO, type MemberDTO, systemClock, todayJst } from '@ito/core';
+import { type Clock, type MeDTO, type MemberDTO, systemClock } from '@ito/core';
 import { useLiveQuery } from 'dexie-react-hooks';
 import {
   createContext,
@@ -11,7 +11,6 @@ import {
 } from 'react';
 import { ItoDb, type LocalEvent } from '../data/db';
 import { DataStore, type SyncState } from '../data/store';
-import type { VmContext } from '../viewmodels/occurrence';
 
 interface DataContextValue {
   db: ItoDb;
@@ -102,12 +101,4 @@ export function useNow(): number {
     return () => clearInterval(t);
   }, [clock]);
   return now;
-}
-
-export function useVmContext(freshSince: number | null = null): VmContext | null {
-  const me = useMe();
-  const members = useMembers();
-  const nowMs = useNow();
-  if (!me) return null;
-  return { nowMs, today: todayJst(nowMs), meId: me.id, members, freshSince };
 }

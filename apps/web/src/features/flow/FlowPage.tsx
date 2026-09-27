@@ -1,7 +1,10 @@
 import { addDays } from '@ito/core';
 import { useMemo, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router';
-import { useEvents, useMe, useMeta, useVmContext } from '../../app/data-context';
+import { useEvents, useMe, useMeta } from '../../app/data-context';
+import { useVmContext } from '../../app/use-vm';
+import { DEVICE_KEYS, readDevice, writeDevice } from '../../pwa/device';
+import { isStandalone } from '../../pwa/install';
 import { buildDay, buildFlowItems, buildSummary, groupByDay } from '../../viewmodels/flow';
 import { toMemberVMs } from '../../viewmodels/occurrence';
 import { DayBlock } from '../common/DayList';
@@ -13,6 +16,10 @@ export function FlowPage() {
   const me = useMe();
   const unread = useMeta<number>('unreadActivity') ?? 0;
   const [filter, setFilter] = useState<string[] | null>(null);
+  // ホームの案内（F-23 のうちホーム画面への追加）。ブラウザで開いていて、閉じていなければ 1 回だけ控えめに
+  const [notice, setNotice] = useState(
+    () => !isStandalone() && readDevice(DEVICE_KEYS.installNoticeDismissed) !== '1',
+  );
   const navigate = useNavigate();
   const [params, setParams] = useSearchParams();
 
@@ -26,7 +33,14 @@ export function FlowPage() {
       groupByDay(events, ctx.today, addDays(ctx.today, 1), ctx, null).get(ctx.today),
       ctx,
     );
-    return { items, summary: buildSummary(today, ctx.members, 0) };
+    let freshCount = 0;
+    for (const item of items) {
+      if (item.kind !== 'day') continue;
+      for (const a of item.day.allDay)
+        if (a.occ.fresh && a.span !== 'middle' && a.span !== 'end') freshCount++;
+      for (const t of item.day.timed) if (t.occ.fresh) freshCount++;
+    }
+    return { items, summary: buildSummary(today, ctx.members, freshCount), freshCount };
   }, [ctx, events, filter]);
 
   if (!ctx || !view || !me) return <p>読み込み中…</p>;
@@ -50,6 +64,36 @@ export function FlowPage() {
           <span className="sr-only">今日のまとめ: </span>
           {view.summary.join(' · ')}
         </p>
+        {view.freshCount > 0 && (
+          <button
+            type="button"
+            className="min-h-11 px-3"
+            onClick={() =>
+              document.querySelector('[data-fresh="true"]')?.scrollIntoView({ block: 'center' })
+            }
+          >
+            新しい予定 {view.freshCount}件
+          </button>
+        )}
+        {notice && (
+          <p role="note" className="flex items-center justify-between gap-2 border p-2 text-sm">
+            <span>ホーム画面に追加すると、アプリのようにすぐ開けます</span>
+            <button type="button" className="min-h-11 px-3" onClick={() => navigate('/install')}>
+              追加の方法
+            </button>
+            <button
+              type="button"
+              className="min-h-11 px-3"
+              aria-label="案内を閉じる"
+              onClick={() => {
+                writeDevice(DEVICE_KEYS.installNoticeDismissed, '1');
+                setNotice(false);
+              }}
+            >
+              閉じる
+            </button>
+          </p>
+        )}
         <p>
           <a
             href="/activity"

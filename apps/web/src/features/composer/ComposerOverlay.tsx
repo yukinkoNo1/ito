@@ -1,9 +1,11 @@
 import { isValidDate } from '@ito/core';
 import { useEffect, useState } from 'react';
 import { useSearchParams } from 'react-router';
-import { useData, useMe, useVmContext } from '../../app/data-context';
+import { useData, useMe } from '../../app/data-context';
 import { useToast } from '../../app/toast';
+import { useVmContext } from '../../app/use-vm';
 import type { EventDraftVM } from '../../ui/types';
+import { applyDraftPatch } from '../../viewmodels/composer';
 import { draftToInput, emptyDraft, eventToDraft } from '../../viewmodels/detail';
 import { toMemberVMs } from '../../viewmodels/occurrence';
 
@@ -20,6 +22,7 @@ export function ComposerOverlay() {
   const toast = useToast();
   const [draft, setDraft] = useState<EventDraftVM | null>(null);
   const [errors, setErrors] = useState<string[]>([]);
+  const [busyTouched, setBusyTouched] = useState(false);
   // ctx は毎分変わるので、開いたとき・対象が変わったときだけ下書きを作る（今日と自分の ID だけを見る）
   const today = ctx?.today ?? null;
   const meId = ctx?.meId ?? null;
@@ -36,6 +39,7 @@ export function ComposerOverlay() {
       if (cancelled) return;
       const date = dateParam && isValidDate(dateParam) ? dateParam : today;
       setDraft(source ? eventToDraft(source) : emptyDraft(date, meId));
+      setBusyTouched(Boolean(source));
       setErrors([]);
     })();
     return () => {
@@ -45,7 +49,12 @@ export function ComposerOverlay() {
 
   if (!open || !draft || !ctx || !me) return null;
   const members = toMemberVMs(ctx.members, ctx.meId);
-  const set = (patch: Partial<EventDraftVM>) => setDraft({ ...draft, ...patch });
+  const set = (patch: Partial<EventDraftVM>) => {
+    if (patch.busy !== undefined) setBusyTouched(true);
+    setDraft(
+      applyDraftPatch(draft, patch, { busyTouched: busyTouched || patch.busy !== undefined }),
+    );
+  };
 
   const close = () => {
     const next = new URLSearchParams(params);
@@ -63,7 +72,12 @@ export function ComposerOverlay() {
         setErrors(r.errors.map((e) => e.message));
         return;
       }
-      toast.show({ kind: 'info', message: '保存しました', actionLabel: null });
+      toast.show({
+        kind: 'undo',
+        message: '保存しました',
+        actionLabel: r.undo ? '元に戻す' : null,
+        onAction: () => void r.undo?.(),
+      });
     } else {
       const r = await store.createEvent(input);
       if (!r.ok) {
@@ -112,7 +126,6 @@ export function ComposerOverlay() {
             onChange={(e) =>
               set({
                 allDay: e.target.checked,
-                busy: !e.target.checked || draft.endDate > draft.startDate,
               })
             }
           />
@@ -124,12 +137,7 @@ export function ComposerOverlay() {
             type="date"
             className="min-h-11 border px-2 text-base"
             value={draft.startDate}
-            onChange={(e) =>
-              set({
-                startDate: e.target.value,
-                endDate: e.target.value > draft.endDate ? e.target.value : draft.endDate,
-              })
-            }
+            onChange={(e) => set({ startDate: e.target.value })}
           />
         </label>
         {draft.allDay ? (

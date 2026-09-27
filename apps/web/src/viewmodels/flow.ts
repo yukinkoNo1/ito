@@ -76,10 +76,10 @@ export function buildDay(date: DateISO, occs: DayOccurrences | undefined, ctx: V
     const i = timedRaw.findIndex(({ raw }) => raw.startMs > ctx.nowMs);
     nowIndex = i === -1 ? timedRaw.length : i;
   }
-  // 複数日の終日予定（busy）が続いている家族（この日の区間は糸を太くする）
+  // 複数日の終日予定が続いている家族（この日の区間は糸を太くする。§22）
   const ongoing = new Set<string>();
   for (const { occ } of occs?.allDay ?? []) {
-    if (occ.busy && occ.startDate !== occ.endDate) for (const id of occ.memberIds) ongoing.add(id);
+    if (occ.startDate !== occ.endDate) for (const id of occ.memberIds) ongoing.add(id);
   }
   const order = activeMembers(ctx.members).map((m) => m.id);
   return {

@@ -4,12 +4,13 @@ import { Link } from 'react-router';
 import { useData, useMe, useMembers } from '../../app/data-context';
 import { useToast } from '../../app/toast';
 import { apiRequest, devLogin, setDevLogin } from '../../data/api';
+import { logoutThisDevice } from '../../pwa/logout';
 
 /** S-07 設定（素朴な HTML。Phase 6 で本番の UI に差し替える） */
 export function SettingsPage() {
   const me = useMe();
   const members = useMembers();
-  const { store } = useData();
+  const { store, db } = useData();
   const toast = useToast();
   const [name, setName] = useState<string | null>(null);
 
@@ -111,6 +112,23 @@ export function SettingsPage() {
             </Link>
           </li>
         </ul>
+      </section>
+      <section aria-label="この端末">
+        <h2 className="font-bold">この端末</h2>
+        <Link className="inline-block min-h-11 py-2" to="/install">
+          ホーム画面に追加
+        </Link>
+        <button
+          type="button"
+          className="block min-h-11 px-3"
+          onClick={() => {
+            void logoutThisDevice(db).then(() => {
+              window.location.assign('/welcome');
+            });
+          }}
+        >
+          この端末からログアウト
+        </button>
       </section>
       {(import.meta.env.DEV || __ITO_E2E__) && (
         <section aria-label="開発用">

@@ -61,7 +61,10 @@ export async function ensureFamily(request: APIRequestContext): Promise<void> {
 /** そのブラウザのコンテキストを、開発用のログインでその人にする */
 export async function loginAs(context: BrowserContext, who: Who): Promise<void> {
   await context.addInitScript((login) => {
-    localStorage.setItem('ito.devLogin', login);
+    try {
+      localStorage.setItem('ito.devLogin', login);
+      localStorage.setItem('ito.onboarded', '1');
+    } catch {}
   }, LOGINS[who]);
 }
 

@@ -22,6 +22,8 @@ export interface OutboxItem {
   createdAt: number;
   attempts: number;
   nextAttemptAt: number;
+  /** 直前の失敗の種類（通信エラーなら、つながったときにすぐ送り直す） */
+  failure?: 'network' | 'server' | 'rate';
 }
 
 /** 競合（C-05 で解決する） */
@@ -35,6 +37,8 @@ export interface ConflictRecord {
   changes: Record<string, unknown> | null;
   kind: OutboxKind;
   createdAt: number;
+  /** 競合のあとに家族がその予定を消した */
+  theirsDeleted?: boolean;
 }
 
 export interface MetaRow {

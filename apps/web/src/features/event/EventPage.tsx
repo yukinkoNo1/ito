@@ -1,8 +1,9 @@
 import { addDays, expand, fromJst, type Occurrence } from '@ito/core';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { useNavigate, useParams, useSearchParams } from 'react-router';
-import { useData, useMembers, useVmContext } from '../../app/data-context';
+import { useData, useMembers } from '../../app/data-context';
 import { useToast } from '../../app/toast';
+import { useVmContext } from '../../app/use-vm';
 import type { LocalEvent } from '../../data/db';
 import { buildDetail } from '../../viewmodels/detail';
 import { toMemberVMs } from '../../viewmodels/occurrence';

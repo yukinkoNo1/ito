@@ -11,6 +11,7 @@ import {
   eventDtoSchema,
   type FieldError,
   type MeDTO,
+  meDtoSchema,
   syncResponseSchema,
   uuidv7,
 } from '@ito/core';
@@ -44,6 +45,13 @@ export function backoffMs(attempts: number): number {
 
 export type Result<T> = { ok: true; value: T } | { ok: false; errors: FieldError[] };
 
+/** push の結果: 送り切った / 通信エラー / 待ち（バックオフ・429・5xx）/ 止めた（401・403・426） */
+type PushOutcome = 'ok' | 'network' | 'waiting' | 'blocked';
+
+function isEmptyChanges(changes: object): boolean {
+  return Object.keys(changes).length === 0;
+}
+
 /**
  * 手元の DB（Dexie）と同期（pull）・送信待ち（outbox）をまとめて持つ（§12）。
  * 画面はいつも Dexie から描画し、ここは Dexie を書き換えるだけ。
@@ -54,6 +62,7 @@ export class DataStore {
   private toastListeners = new Set<(t: Toast) => void>();
   private running: Promise<void> | null = null;
   private again = false;
+  private againRetryNow = false;
   /** 送信中の送信待ち（畳む対象から外す） */
   private inflightId: string | null = null;
 
@@ -102,18 +111,23 @@ export class DataStore {
 
   /**
    * 送信（push）→ 取得（pull）。同時に呼ばれたら 1 回にまとめて、終わったあとにもう 1 回だけ回す。
-   * retryNow: バックオフ中の送信待ちもすぐ送り直す（online イベント・前面復帰・再試行ボタン）
+   * retryNow: バックオフ中の送信待ちもすぐ送り直す（online イベント・前面復帰・再試行ボタン）。
+   * 実行中に retryNow で呼ばれたら、次の回に持ち越す。
    */
   syncNow(opts: { retryNow?: boolean } = {}): Promise<void> {
     if (this.running) {
       this.again = true;
+      this.againRetryNow ||= opts.retryNow ?? false;
       return this.running;
     }
+    let retryNow = opts.retryNow ?? false;
     this.running = (async () => {
       try {
         do {
           this.again = false;
-          await this.cycle(opts.retryNow ?? false);
+          await this.cycle(retryNow);
+          retryNow = this.againRetryNow;
+          this.againRetryNow = false;
         } while (this.again);
       } finally {
         this.running = null;
@@ -124,35 +138,34 @@ export class DataStore {
 
   private async cycle(retryNow: boolean): Promise<void> {
     this.setState({ status: 'syncing' });
-    if (retryNow) await this.resetBackoff();
-    const pushed = await this.push();
-    if (pushed === 'offline') {
-      this.setState({ status: 'offline' });
-      return;
+    if (retryNow) await this.resetBackoff('all');
+    // 別の人としてつながっていたら、送信待ちを送る前に手元を消す
+    if ((await this.db.outbox.count()) > 0) {
+      const checked = await this.checkIdentity();
+      if (checked === 'network') return this.setState({ status: 'offline' });
+      if (checked === 'blocked') return;
     }
+    const pushed = await this.push();
+    if (pushed === 'network') return this.setState({ status: 'offline' });
     if (pushed === 'blocked') return;
     const pulled = await this.pull();
-    if (pulled === 'offline') {
-      this.setState({ status: 'offline' });
-      return;
-    }
+    if (pulled === 'network') return this.setState({ status: 'offline' });
     if (pulled === 'blocked') return;
-    // つながったので、バックオフ中の送信待ちがあれば送り直す
-    const waiting = await this.db.outbox.count();
-    if (waiting > 0) {
-      await this.resetBackoff();
+    // つながったので、通信エラーで待っていた送信待ちはすぐ送り直す（429・5xx の待ちはそのまま）
+    if (pushed === 'waiting' && (await this.resetBackoff('network')) > 0) {
       const again = await this.push();
-      if (again === 'offline') {
-        this.setState({ status: 'offline' });
-        return;
-      }
+      if (again === 'network') return this.setState({ status: 'offline' });
       if (again === 'blocked') return;
     }
     this.setState({ status: 'synced', lastSyncedAt: this.clock.now(), block: null });
   }
 
-  private async resetBackoff(): Promise<void> {
-    await this.db.outbox.toCollection().modify({ nextAttemptAt: 0 });
+  private async resetBackoff(which: 'all' | 'network'): Promise<number> {
+    const collection =
+      which === 'all'
+        ? this.db.outbox.toCollection()
+        : this.db.outbox.filter((o) => o.failure === 'network');
+    return collection.modify({ nextAttemptAt: 0 });
   }
 
   private block(block: SyncBlock): 'blocked' {
@@ -160,19 +173,50 @@ export class DataStore {
     return 'blocked';
   }
 
+  /** 手元の本人と、サーバーから見た本人が違えば手元を消す（前の本人の予定・送信待ちを残さない） */
+  private async checkIdentity(): Promise<'ok' | 'network' | 'blocked'> {
+    let res: Awaited<ReturnType<typeof apiRequest>>;
+    try {
+      res = await apiRequest('GET', '/api/me', { fetcher: this.fetcher });
+    } catch (e) {
+      if (e instanceof NetworkError) return 'network';
+      throw e;
+    }
+    if (res.status !== 200) return this.blockFor(res.status, res.body) ?? 'network';
+    const parsed = meDtoSchema.safeParse(res.body);
+    if (!parsed.success) return this.block({ kind: 'server' });
+    await this.forgetIfOtherPerson(parsed.data.id);
+    return 'ok';
+  }
+
+  private async forgetIfOtherPerson(meId: string): Promise<boolean> {
+    const stored = await this.me();
+    if (!stored || stored.id === meId) return false;
+    const db = this.db;
+    await db.transaction('rw', [db.events, db.outbox, db.conflicts, db.meta], async () => {
+      await db.events.clear();
+      await db.outbox.clear();
+      await db.conflicts.clear();
+      await db.meta.clear();
+    });
+    return true;
+  }
+
   /** 取得（GET /api/sync）。応答は zod で確かめてから手元に反映する */
-  async pull(): Promise<'ok' | 'offline' | 'blocked'> {
+  async pull(): Promise<'ok' | 'network' | 'blocked'> {
     const cursor = (await this.db.getMeta<number>('cursor')) ?? 0;
     let res: Awaited<ReturnType<typeof apiRequest>>;
     try {
       res = await apiRequest('GET', `/api/sync?cursor=${cursor}`, { fetcher: this.fetcher });
     } catch (e) {
-      if (e instanceof NetworkError) return 'offline';
+      if (e instanceof NetworkError) return 'network';
       throw e;
     }
-    if (res.status !== 200) return this.blockFor(res.status, res.body) ?? 'offline';
+    if (res.status !== 200) return this.blockFor(res.status, res.body) ?? 'network';
     const parsed = syncResponseSchema.safeParse(res.body);
     if (!parsed.success) return this.block({ kind: 'server' });
+    // 別の人の応答なら、手元を消して全件から取り直す（投影が人ごとに違うので差分は使えない）
+    if (await this.forgetIfOtherPerson(parsed.data.me.id)) return this.pull();
     const data = parsed.data;
     const db = this.db;
     await db.transaction(
@@ -180,18 +224,30 @@ export class DataStore {
       [db.events, db.members, db.meta, db.outbox, db.conflicts],
       async () => {
         const pending = new Set((await db.outbox.toArray()).map((o) => o.eventId));
-        const conflicted = new Set((await db.conflicts.toArray()).map((c) => c.eventId));
-        const keep = (id: string) => pending.has(id) || conflicted.has(id);
+        const conflicts = new Map((await db.conflicts.toArray()).map((c) => [c.eventId, c]));
+        const keep = (id: string) => pending.has(id) || conflicts.has(id);
         if (data.full) {
           const incoming = new Set(data.events.map((e) => e.id));
           const localIds = (await db.events.toCollection().primaryKeys()) as string[];
-          const gone = localIds.filter((id) => !incoming.has(id) && !keep(id));
-          await db.events.bulkDelete(gone);
+          await db.events.bulkDelete(localIds.filter((id) => !incoming.has(id) && !keep(id)));
+          // 競合中の予定が全件に入っていなければ、家族が消した
+          for (const [id, c] of conflicts) {
+            if (!incoming.has(id)) await db.conflicts.put({ ...c, theirsDeleted: true });
+          }
         }
         await db.events.bulkPut(
           data.events.filter((e) => !keep(e.id)).map((e) => ({ ...e, sync: 'synced' as const })),
         );
         await db.events.bulkDelete(data.deletedEventIds.filter((id) => !keep(id)));
+        // 競合中の予定は、家族の側の最新を競合の記録に取り込む
+        for (const e of data.events) {
+          const c = conflicts.get(e.id);
+          if (c) await db.conflicts.put({ ...c, theirs: e, theirsDeleted: false });
+        }
+        for (const id of data.deletedEventIds) {
+          const c = conflicts.get(id);
+          if (c) await db.conflicts.put({ ...c, theirsDeleted: true });
+        }
         await db.members.clear();
         await db.members.bulkPut(data.members);
         await db.setMeta('cursor', data.cursor);
@@ -218,39 +274,42 @@ export class DataStore {
       return this.block({ kind: 'not_member', login });
     }
     if (status === 426) return this.block({ kind: 'client_outdated' });
-    if (status >= 500) return null;
     return null;
   }
 
   /** 送信（outbox を順に）。応答ごとの扱いは §12 の表のとおり */
-  async push(): Promise<'ok' | 'offline' | 'blocked'> {
+  async push(): Promise<PushOutcome> {
     for (;;) {
       const item = await this.db.outbox.orderBy('createdAt').first();
       if (!item) return 'ok';
-      if (item.nextAttemptAt > this.clock.now()) return 'offline';
+      if (item.nextAttemptAt > this.clock.now()) return 'waiting';
       this.inflightId = item.id;
-      let res: Awaited<ReturnType<typeof apiRequest>>;
       try {
-        res = await apiRequest(item.method, item.path, {
-          body: item.body,
-          headers: {
-            'Idempotency-Key': item.id,
-            ...(item.baseVersion !== null ? { 'If-Match': String(item.baseVersion) } : {}),
-          },
-          fetcher: this.fetcher,
-        });
-      } catch (e) {
+        let res: Awaited<ReturnType<typeof apiRequest>>;
+        try {
+          res = await apiRequest(item.method, item.path, {
+            body: item.body,
+            headers: {
+              'Idempotency-Key': item.id,
+              ...(item.baseVersion !== null ? { 'If-Match': String(item.baseVersion) } : {}),
+            },
+            fetcher: this.fetcher,
+          });
+        } catch (e) {
+          if (!(e instanceof NetworkError)) throw e;
+          await this.db.outbox.update(item.id, {
+            attempts: item.attempts + 1,
+            nextAttemptAt: this.clock.now() + backoffMs(item.attempts),
+            failure: 'network',
+          });
+          return 'network';
+        }
+        const outcome = await this.handleResponse(item, res.status, res.body, res.headers);
+        if (outcome !== 'next') return outcome;
+      } finally {
+        // 応答の処理が終わるまでは送信中として扱う（そのすきまの変更を送った項目に畳まない）
         this.inflightId = null;
-        if (!(e instanceof NetworkError)) throw e;
-        await this.db.outbox.update(item.id, {
-          attempts: item.attempts + 1,
-          nextAttemptAt: this.clock.now() + backoffMs(item.attempts),
-        });
-        return 'offline';
       }
-      this.inflightId = null;
-      const outcome = await this.handleResponse(item, res.status, res.body, res.headers);
-      if (outcome !== 'next') return outcome;
     }
   }
 
@@ -259,19 +318,25 @@ export class DataStore {
     status: number,
     body: unknown,
     headers: Headers,
-  ): Promise<'next' | 'offline' | 'blocked'> {
+  ): Promise<'next' | 'waiting' | 'blocked'> {
     const db = this.db;
     const code = problemCode(body);
     // 2xx: サーバーの結果で手元を置き換え、同じ予定の後続の If-Match を新しい version にする
     if (status >= 200 && status < 300) {
-      await db.transaction('rw', [db.events, db.outbox], async () => {
+      await db.transaction('rw', [db.events, db.outbox, db.conflicts], async () => {
         await db.outbox.delete(item.id);
+        await db.conflicts.delete(item.eventId);
         const rest = await db.outbox.where('eventId').equals(item.eventId).sortBy('createdAt');
         const serverEvent = extractEvent(body);
         const version = serverEvent?.version ?? extractVersion(body);
         if (version !== null) {
-          for (const r of rest)
-            if (r.baseVersion !== null) await db.outbox.update(r.id, { baseVersion: version });
+          for (const r of rest) {
+            if (r.baseVersion === null) continue;
+            await db.outbox.update(r.id, {
+              baseVersion: version,
+              ...(r.snapshot ? { snapshot: { ...r.snapshot, version } } : {}),
+            });
+          }
         }
         if (serverEvent) {
           if (rest.length === 0) {
@@ -292,9 +357,11 @@ export class DataStore {
         await db.outbox.bulkDelete(all.map((o) => o.id));
         const mine = (await db.events.get(item.eventId)) ?? null;
         if (theirs) {
+          // 自分が変えた項目だけ（上書きのときにこれだけを送る）
+          const firstSnapshot = all.find((o) => o.snapshot)?.snapshot ?? item.snapshot;
           const changes =
-            item.kind === 'update' && mine && item.snapshot
-              ? (diffChanges(item.snapshot, mine) as Record<string, unknown>)
+            mine && firstSnapshot
+              ? (diffChanges(firstSnapshot, mine) as Record<string, unknown>)
               : null;
           const record: ConflictRecord = {
             eventId: item.eventId,
@@ -327,22 +394,31 @@ export class DataStore {
       const retry = Number(headers.get('retry-after') ?? '60');
       await db.outbox.update(item.id, {
         nextAttemptAt: this.clock.now() + (Number.isFinite(retry) ? retry : 60) * 1000,
+        failure: 'rate',
       });
-      return 'offline';
+      return 'waiting';
     }
     if (status >= 500) {
       await db.outbox.update(item.id, {
         attempts: item.attempts + 1,
         nextAttemptAt: this.clock.now() + backoffMs(item.attempts),
+        failure: 'server',
       });
-      return 'offline';
+      return 'waiting';
     }
     // 422・403 forbidden など、その予定だけの拒否: snapshot で手元を元に戻して知らせる
     await db.transaction('rw', [db.events, db.outbox], async () => {
       const all = await db.outbox.where('eventId').equals(item.eventId).toArray();
       await db.outbox.bulkDelete(all.map((o) => o.id));
-      if (item.snapshot) await db.events.put(item.snapshot);
-      else await db.events.delete(item.eventId);
+      if (item.snapshot) {
+        await db.events.put({
+          ...item.snapshot,
+          version: item.baseVersion ?? item.snapshot.version,
+          sync: 'synced',
+        });
+      } else {
+        await db.events.delete(item.eventId);
+      }
     });
     const detail =
       typeof body === 'object' &&
@@ -381,11 +457,12 @@ export class DataStore {
 
   async createEvent(input: EventCreateInput): Promise<Result<LocalEvent>> {
     const parsed = eventCreateSchema.safeParse(input);
-    if (!parsed.success)
+    if (!parsed.success) {
       return {
         ok: false,
         errors: parsed.error.issues.map((i) => ({ field: i.path.join('.'), message: i.message })),
       };
+    }
     const meId = await this.meId();
     const now = this.clock.now();
     const id = parsed.data.id ?? uuidv7(now);
@@ -410,19 +487,30 @@ export class DataStore {
     return { ok: true, value: event };
   }
 
-  async updateEvent(eventId: string, changesInput: EventChangesInput): Promise<Result<LocalEvent>> {
+  /**
+   * 変更（まず手元に当てて、送信待ちに積む）。中身が変わらなければ何も積まない。
+   * 戻り値の undo で「元に戻す」（逆向きの変更を積む。まだ送っていなければ畳まれて消える）。
+   */
+  async updateEvent(
+    eventId: string,
+    changesInput: EventChangesInput,
+  ): Promise<Result<LocalEvent> & { undo?: () => Promise<void> }> {
     const parsed = eventChangesSchema.safeParse(changesInput);
-    if (!parsed.success)
+    if (!parsed.success) {
       return {
         ok: false,
         errors: parsed.error.issues.map((i) => ({ field: i.path.join('.'), message: i.message })),
       };
+    }
     const meId = await this.meId();
     const db = this.db;
-    let result: Result<LocalEvent> = {
+    // トランザクションの中で書き換えるので、代入による型の絞り込みを避ける（as で宣言）
+    let result = {
       ok: false,
       errors: [{ field: 'id', message: '予定が見つかりません' }],
-    };
+    } as Result<LocalEvent>;
+    let before = null as LocalEvent | null;
+    let changed = false;
     await db.transaction('rw', [db.events, db.outbox], async () => {
       const current = await db.events.get(eventId);
       if (!current) return;
@@ -439,6 +527,13 @@ export class DataStore {
         return;
       }
       const next: LocalEvent = { ...applied.value, version: current.version, sync: 'pending' };
+      const own = diffChanges(current, next);
+      if (isEmptyChanges(own)) {
+        result = { ok: true, value: current };
+        return;
+      }
+      before = current;
+      changed = true;
       const items = await this.itemsFor(eventId);
       const tail = items[items.length - 1];
       const last = tail && this.isUnsent(tail) ? tail : undefined;
@@ -446,10 +541,20 @@ export class DataStore {
         // 作成＋更新 → 作成 1 件
         await db.outbox.update(last.id, { body: dtoToCreateBody(next) });
       } else if (last?.kind === 'update' && last.snapshot) {
-        // 更新どうし → 1 件（最初の変更前の状態との差分）
-        await db.outbox.update(last.id, {
-          body: { scope: 'all', changes: diffChanges(last.snapshot, next) },
-        });
+        // 更新どうし → 1 件（最初の変更前の状態との差分）。差分がなくなれば送信待ちも消す
+        const merged = diffChanges(last.snapshot, next);
+        if (isEmptyChanges(merged)) {
+          await db.outbox.delete(last.id);
+          const others = items.length > 1;
+          await db.events.put({
+            ...last.snapshot,
+            version: current.version,
+            sync: others ? 'pending' : 'synced',
+          });
+          result = { ok: true, value: last.snapshot };
+          return;
+        }
+        await db.outbox.update(last.id, { body: { scope: 'all', changes: merged } });
       } else {
         await db.outbox.add(
           this.newItem({
@@ -457,7 +562,7 @@ export class DataStore {
             kind: 'update',
             method: 'PATCH',
             path: `/api/events/${eventId}`,
-            body: { scope: 'all', changes: diffChanges(current, next) },
+            body: { scope: 'all', changes: own },
             baseVersion: current.version,
             snapshot: current,
           }),
@@ -466,8 +571,16 @@ export class DataStore {
       await db.events.put(next);
       result = { ok: true, value: next };
     });
-    void this.syncNow();
-    return result;
+    if (changed) void this.syncNow();
+    const snapshot = before;
+    if (!result.ok || !snapshot) return result;
+    const after = result.value;
+    return {
+      ...result,
+      undo: async () => {
+        await this.updateEvent(eventId, diffChanges(after, snapshot));
+      },
+    };
   }
 
   /**
@@ -479,13 +592,14 @@ export class DataStore {
     const db = this.db;
     let undo: () => Promise<void> = async () => {};
     let ok = false;
-    await db.transaction('rw', [db.events, db.outbox], async () => {
+    await db.transaction('rw', [db.events, db.outbox, db.conflicts], async () => {
       const current = await db.events.get(eventId);
       if (!current || !canSeeContent(current, meId)) return;
       const pending = (await this.itemsFor(eventId)).filter((o) => this.isUnsent(o));
       const unsentCreate = pending.find((o) => o.kind === 'create');
       await db.outbox.bulkDelete(pending.map((o) => o.id));
       await db.events.delete(eventId);
+      await db.conflicts.delete(eventId);
       ok = true;
       if (unsentCreate) {
         undo = async () => {
@@ -501,7 +615,7 @@ export class DataStore {
         path: `/api/events/${eventId}`,
         body: {},
         baseVersion: current.version,
-        snapshot: { ...serverState, sync: 'synced' },
+        snapshot: { ...serverState, version: current.version, sync: 'synced' },
       });
       await db.outbox.add(item);
       undo = () => this.undoDelete(item, current);
@@ -518,14 +632,15 @@ export class DataStore {
       if (stillPending) {
         await db.outbox.delete(item.id);
         const serverState = item.snapshot;
-        if (serverState && JSON.stringify(diffChanges(serverState, before)) !== '{}') {
+        const changes = serverState ? diffChanges(serverState, before) : {};
+        if (serverState && !isEmptyChanges(changes)) {
           await db.outbox.add(
             this.newItem({
               eventId: before.id,
               kind: 'update',
               method: 'PATCH',
               path: `/api/events/${before.id}`,
-              body: { scope: 'all', changes: diffChanges(serverState, before) },
+              body: { scope: 'all', changes },
               baseVersion: serverState.version,
               snapshot: serverState,
             }),
@@ -536,7 +651,7 @@ export class DataStore {
         }
         return;
       }
-      // もう送った削除は、復元を送る
+      // もう送った（かもしれない）削除は、復元を送る
       await db.outbox.add(
         this.newItem({
           eventId: before.id,
@@ -579,6 +694,12 @@ export class DataStore {
     const theirs: LocalEvent = { ...conflict.theirs, sync: 'synced' };
     await db.transaction('rw', [db.events, db.outbox, db.conflicts], async () => {
       await db.conflicts.delete(eventId);
+      // 家族が消していたら、「家族の変更を採用」は消す、ほかは自分の予定を新しく作る
+      if (conflict.theirsDeleted) {
+        await db.events.delete(eventId);
+        if (choice !== 'theirs' && conflict.mine) await this.enqueueCopy(conflict.mine);
+        return;
+      }
       if (choice === 'theirs') {
         await db.events.put(theirs);
         return;
@@ -599,6 +720,7 @@ export class DataStore {
           );
           return;
         }
+        // C-05 で見せた自分の版をそのまま採る（上書き）
         const mine: LocalEvent = { ...conflict.mine, version: theirs.version, sync: 'pending' };
         await db.events.put(mine);
         await db.outbox.add(
@@ -616,24 +738,26 @@ export class DataStore {
       }
       // 両方残す: 家族の変更を採用し、自分の変更は新しい予定として作る
       await db.events.put(theirs);
-      if (conflict.mine) {
-        const copyId = uuidv7(this.clock.now());
-        const copy: LocalEvent = { ...conflict.mine, id: copyId, version: 0, sync: 'pending' };
-        await db.events.put(copy);
-        await db.outbox.add(
-          this.newItem({
-            eventId: copyId,
-            kind: 'create',
-            method: 'POST',
-            path: '/api/events',
-            body: dtoToCreateBody(copy),
-            baseVersion: null,
-            snapshot: null,
-          }),
-        );
-      }
+      if (conflict.mine) await this.enqueueCopy(conflict.mine);
     });
     void this.syncNow();
+  }
+
+  private async enqueueCopy(mine: LocalEvent): Promise<void> {
+    const copyId = uuidv7(this.clock.now());
+    const copy: LocalEvent = { ...mine, id: copyId, version: 0, sync: 'pending' };
+    await this.db.events.put(copy);
+    await this.db.outbox.add(
+      this.newItem({
+        eventId: copyId,
+        kind: 'create',
+        method: 'POST',
+        path: '/api/events',
+        body: dtoToCreateBody(copy),
+        baseVersion: null,
+        snapshot: null,
+      }),
+    );
   }
 }
 

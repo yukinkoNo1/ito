@@ -51,7 +51,7 @@ export function DayBlock({
       </h3>
       <ul>
         {rows.map((o) => (
-          <li key={o.key}>
+          <li key={o.key} data-fresh={o.fresh ? 'true' : undefined}>
             <button
               type="button"
               className="flex min-h-11 w-full items-center gap-2 text-left"

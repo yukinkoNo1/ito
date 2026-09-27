@@ -25,13 +25,41 @@ export async function watchProblems(page: Page): Promise<PageProblems> {
 }
 
 /** problems は auto: すべてのテストで CSP 違反とコンソールエラーが 0 件であることを確かめる */
-export const test = base.extend<{ problems: PageProblems }>({
+/**
+ * allowedConsoleErrors: ネットワークを切るテストで、Chromium 自身が出す「Failed to load resource」
+ * （意図して失敗させた要求・409 などの応答）だけを許す。アプリのエラーは許さない。
+ */
+export const test = base.extend<{
+  problems: PageProblems;
+  onboarded: undefined;
+  allowedConsoleErrors: { patterns: RegExp[] };
+}>({
+  allowedConsoleErrors: [{ patterns: [] }, { option: true }],
+  /** 既定の page は「はじめて」を済ませた端末にする（はじめての画面を試すテストは別のコンテキストを作る） */
+  onboarded: [
+    async ({ context }, use) => {
+      await context.addInitScript(() => {
+        try {
+          localStorage.setItem('ito.onboarded', '1');
+        } catch {}
+      });
+      await use(undefined);
+    },
+    { auto: true },
+  ],
   problems: [
-    async ({ page }, use) => {
+    async ({ page, allowedConsoleErrors }, use) => {
       const problems = await watchProblems(page);
       await use(problems);
       expect(problems.cspViolations, 'CSP 違反').toEqual([]);
-      expect(problems.consoleErrors, 'コンソールエラー').toEqual([]);
+      const unexpected = problems.consoleErrors.filter(
+        (msg) =>
+          !(
+            msg.startsWith('Failed to load resource:') &&
+            allowedConsoleErrors.patterns.some((re) => re.test(msg))
+          ),
+      );
+      expect(unexpected, 'コンソールエラー').toEqual([]);
     },
     { auto: true },
   ],

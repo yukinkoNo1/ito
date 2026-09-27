@@ -45,6 +45,17 @@
 | Phase 1 | メンバーの名前の重複禁止（追加・変更・再有効化・/api/me）、最後の管理者 | apps/server/test/members.test.ts | OK |
 | Phase 1 | 履歴の差分（人が読める文字列） | events.test.ts「作成・更新・削除・復元が残り、差分は人が読める文字列」 | OK |
 | Phase 1 | `pnpm check`・`docker compose build` | `pnpm check`（188 件）、`docker compose build`・`up -d --wait`・`down` | OK |
+| Phase 2 | オフライン閲覧・オフライン作成 → 復帰で送信 | E2E e2e/phase2.spec.ts「オフラインで閲覧・作成 → 復帰で送信」（context.setOffline。SW がアプリシェルを返し、IndexedDB から描画） | OK |
+| Phase 2 | API だけ遮断した状態（Tailscale 切断の再現）でも同じ | E2E「Tailscale だけ切れた状態でも…」（context.route で /api/** を abort → C-02「家のサーバーにつながりません（Tailscale を確認）」→ 再試行で送信） | OK |
+| Phase 2 | 別のメンバーが追加した予定に「新」が付き、次に開いたときには消える | E2E「別のメンバーが追加した予定に「新」が付き…」（同じ回のあいだは消えない・「新しい予定 n件」）、web viewmodels.test.ts「新着の印」 | OK |
+| Phase 2 | 同じ予定をオフラインで 2 回編集しても自分の変更どうしで 409 にならない | E2E「同じ予定をオフラインで 2 回編集しても…」、web store.test.ts「更新どうし → 1 件」「送信中の変更には畳まず…If-Match を書き換える」、store-review.test.ts「WD-01」 | OK |
+| Phase 2 | 競合を起こして 3 通りの解決 | E2E「競合を起こして解決する: 家族の変更を採用／自分の変更で上書き／両方残す」、store.test.ts「競合の 3 通りの解決」 | OK |
+| Phase 2 | `/api/*` が Cache Storage に入らない | E2E「/api/* は Cache Storage に入らない…」（/api/export へのページ遷移も index.html にならない） | OK |
+| Phase 2 | 「更新」を押すと新しい SW に切り替わる | E2E「「更新」を押すと新しい SW に切り替わる」（E2E 用ビルドの sw.js を一時的に書き換え → 待機 → 案内 → 更新 → waiting なし・activated） | OK |
+| Phase 2 | manifest の警告がなくインストール可能 | E2E「インストールできる」（CDP の Page.getInstallabilityErrors が空、Page.getAppManifest のエラーなし。§24 D25） | OK |
+| Phase 2 | §12 の応答ごとの扱い（409 は後続を止めない、404/410、422/403、401/403 not_member、426、429、5xx・通信エラーの指数バックオフ最大 1 時間、全件同期） | web test/store.test.ts・store-review.test.ts（fake-indexeddb） | OK |
+| Phase 2 | S-11 はじめて（2 画面）・S-12・ホームの案内（閉じたら出ない）・この端末からログアウト | E2E「はじめて（色 → 使い方）→ ホームの案内…」「この端末からログアウト」、web logout.test.ts | OK |
+| Phase 2 | 全テストで CSP 違反・コンソールエラー 0 件 | e2e/fixtures.ts（auto。ネットワークを切るテストでだけ、Chromium 自身が出す「Failed to load resource」の該当するものを許す） | OK |
 
 ## 決めたこと（SPEC §24 に書いたもの）
 - D15: 作業の順番（Phase 6 を Phase 2 の次に）。後のフェーズの機能が要る受け入れ項目は「後で確認」
@@ -72,4 +83,5 @@
 - pnpm は PC 全体には入れず、corepack の shim をリポジトリ内の `.tools/bin`（.gitignore 済み）に置いて使っている（`corepack enable --install-directory .tools/bin pnpm`）。版は package.json の packageManager（pnpm@10.34.5）
 
 ## 既知の問題
+- E2E のコンソールエラー 0 件の確認では、ネットワークを切るテスト（オフライン・API 遮断・競合）に限り、Chromium が自分で出す「Failed to load resource: net::ERR_INTERNET_DISCONNECTED / net::ERR_FAILED / status of 409」を許している（テストで意図して起こした失敗。アプリのエラーは許さない。e2e/fixtures.ts の allowedConsoleErrors）
 - vite-plugin-pwa 1.3 が Vite 8 で「inlineDynamicImports option is deprecated」の警告を出す（ビルドは成功する。プラグイン側の問題）

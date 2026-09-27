@@ -1,7 +1,8 @@
 import { addDays, addMonths, firstOfMonth, monthKey, parseDate, WEEKDAY_LABELS } from '@ito/core';
 import { useMemo } from 'react';
 import { useNavigate, useParams, useSearchParams } from 'react-router';
-import { useEvents, useMe, useVmContext } from '../../app/data-context';
+import { useEvents, useMe } from '../../app/data-context';
+import { useVmContext } from '../../app/use-vm';
 import { buildDay, groupByDay } from '../../viewmodels/flow';
 import { buildMonth } from '../../viewmodels/month';
 import { toMemberVMs } from '../../viewmodels/occurrence';

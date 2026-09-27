@@ -59,7 +59,8 @@ export function buildMonth(
   const first = firstOfMonth(year, month);
   const gridStart = startOfWeek(first, weekStart);
   const nextMonth = month === 12 ? firstOfMonth(year + 1, 1) : firstOfMonth(year, month + 1);
-  const weeksCount = Math.ceil(diffDays(gridStart, nextMonth) / 7);
+  // §22: 5〜6 行（4 行で収まる月も 5 行にする）
+  const weeksCount = Math.max(5, Math.ceil(diffDays(gridStart, nextMonth) / 7));
   const gridEnd = addDays(gridStart, weeksCount * 7);
   const byDay = groupByDay(events, gridStart, gridEnd, ctx, filter);
 
