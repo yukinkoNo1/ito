@@ -16,7 +16,8 @@
       "!!apps/server/drizzle",
       "!!.tools",
       "!!.logs",
-      "!!.data"
+      "!!.data",
+      "!!packages/core/src/holidays-data.ts"
     ]
   },
   "formatter": {

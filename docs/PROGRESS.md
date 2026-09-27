@@ -33,6 +33,18 @@
 | Phase 0 | SIGTERM で DB を閉じてから終了 | `docker compose stop app` のログ（signal → shutting down → stopped、ExitCode=0）、runtime.test.ts（shutdown を直接呼ぶ） | OK |
 | Phase 0 | E2E の雛形（CSP 違反・コンソールエラー 0 件） | `pnpm test:e2e`（e2e/smoke.spec.ts） | OK |
 | Phase 0 | zod を jitless で使う（new Function を呼ばない） | apps/server/test/zod-setup.test.ts | OK |
+| Phase 1 | 2 人の開発ログインで、片方が作った予定がもう片方に出る | E2E e2e/phase1.spec.ts「2 人の開発ログインで…」、API apps/server/test/events.test.ts「作った予定が、ほかの家族の同期に出る」 | OK |
+| Phase 1 | 他人の非公開は全 API（409 の本文を含む）で「予定あり」の形 | events.test.ts「他人の非公開（§10・§14。T5）」（sync・差分 sync・activity・trash・409 の本文・403 の本文）、feed.test.ts（持ち主の ID ヘッダでも title: null）、core/test/events.test.ts「projectEvent」 | OK（まだない経路は「後で足すテスト」） |
+| Phase 1 | 他人の非公開の更新は 409 ではなく 403 | events.test.ts「他人の非公開の更新・削除・復元は 409 ではなく 403（古い If-Match でも）」 | OK |
+| Phase 1 | 409 と Idempotency のテスト | events.test.ts「If-Match が合えば…」「Idempotency-Key がなければ 400…」「更新の再送（同じ Idempotency-Key）は…」 | OK |
+| Phase 1 | 祝日が月と日に出る | E2E phase1.spec.ts（2026-10-12 スポーツの日が月のセルと日の一覧に出る）、core「祝日」、web viewmodels.test.ts「MonthVM」 | OK |
+| Phase 1 | 削除 → 元に戻す | E2E phase1.spec.ts「削除 → 元に戻す」（サーバーにも残る） | OK |
+| Phase 1 | §21 の表示用フィードのテストが通る（例のファイルとの比較は朝練を除く） | apps/server/test/feed.test.ts（§21 の一覧すべて） | OK（朝練は Phase 3 で後で確認） |
+| Phase 1 | CLI で発行したキーで 200、止めると 401 | `node scripts/feed-check.mjs`（手元）と `docker compose exec -T app node --input-type=module - < scripts/feed-check-inner.mjs`（Docker）。キーは表示せず状態コードだけ | OK（手元・Docker とも キーなし 401 / キーあり 200 / 止めたあと 401） |
+| Phase 1 | CLI（create / list / revoke、5 つまで、キーの平文を DB・一覧・ログに出さない） | apps/server/test/cli.test.ts、feed.test.ts「連携キーの平文はログ・DB・エラー応答に出ない」 | OK |
+| Phase 1 | メンバーの名前の重複禁止（追加・変更・再有効化・/api/me）、最後の管理者 | apps/server/test/members.test.ts | OK |
+| Phase 1 | 履歴の差分（人が読める文字列） | events.test.ts「作成・更新・削除・復元が残り、差分は人が読める文字列」 | OK |
+| Phase 1 | `pnpm check`・`docker compose build` | `pnpm check`（188 件）、`docker compose build`・`up -d --wait`・`down` | OK |
 
 ## 決めたこと（SPEC §24 に書いたもの）
 - D15: 作業の順番（Phase 6 を Phase 2 の次に）。後のフェーズの機能が要る受け入れ項目は「後で確認」
@@ -41,9 +53,14 @@
 - D18: 管理者の自動登録の名前の衝突（末尾に 2, 3…）と色（§22 の順で未使用の最初の色）
 - D19: 手元の開発は Node 22.12 以上でも可（本番は node:24-slim）、react-router は 7 系
 - D20: 開発モードの「人の端末」は X-Dev-Login 付きの要求
+- D21: feed_tokens に last_user_device_at（5 分に 1 回まで書く）
+- D22: 予定の API の細則（更新・削除・復元でも Idempotency-Key を効かせる、ゴミ箱の予定は 410、担当なしは不可、他人の非公開はゴミ箱に出さない、終日は 366 日まで）
+- D23: 連携キーの確認はキーを表示しないスクリプトで状態コードだけ
+- D24: 祝日の表は holiday_jp から 2000 年以降の日付と名前だけを取り出して使う（ライブラリと一致をテスト）
 
 ## 後で足すテスト
-（Phase 1 で書く）
+- 非公開の漏えい（まだない経路）: 書き出し（JSON・ICS。Phase 7）、Push の文面（Phase 4）、朝のまとめ・前夜の予告（Phase 4）、一言入力の重なりの警告（Phase 5。端末内で作るので他人の非公開は「予定あり」になることを確かめる）、検索（Phase 7。端末内の DB を検索する）
+- 表示用フィードの例のファイルとの比較に朝練（繰り返し）を含める・例外がフィードに出る（Phase 3）
 
 ## 要確認（持ち主がやること・確かめてほしいこと。根拠の出力も）
 - **Node.js 24 LTS が開発機に入っていない**（管理者権限のインストールは持ち主の作業）。手元の開発・テストは Node 22 で行い、本番のイメージ（node:24-slim）では 24 で動くことを docker compose で確かめている（§24 D19）。

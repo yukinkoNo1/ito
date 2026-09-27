@@ -41,7 +41,12 @@
 - まだない経路（export / push の文面 / 朝のまとめ / 一言入力の重なり警告）の漏えいテストは PROGRESS の「後で足すテスト」へ
 
 ## 決めたこと（§24 に書く）
-- D19: feed_tokens に `last_user_device_at`（人の端末から最後に使われた時刻。5 分に 1 回まで書く）（RUNBOOK 3.）
-- D20: 開発モードの「人の端末」は X-Dev-Login 付きの要求（RUNBOOK 3.）
-- D21: 更新・削除・復元でも Idempotency-Key があれば効かせる／ゴミ箱の予定への更新・削除は 410／担当なし（全員でもない）の予定は作れない／他人の非公開はゴミ箱に出さない
-- D22: 連携キーの確認はキーを表示しないスクリプト（scripts/feed-check.mjs）で状態コードだけを出す
+- D20: 開発モードの「人の端末」は X-Dev-Login 付きの要求（RUNBOOK 3.。Phase 0 で実装）
+- D21: feed_tokens に `last_user_device_at`（人の端末から最後に使われた時刻。5 分に 1 回まで書く）（RUNBOOK 3.）
+- D22: 更新・削除・復元でも Idempotency-Key があれば効かせる／ゴミ箱の予定への更新・削除は 410／担当なし（全員でもない）の予定は作れない／他人の非公開はゴミ箱に出さない／終日は 366 日まで
+- D23: 連携キーの確認はキーを表示しないスクリプト（scripts/feed-check.mjs）で状態コードだけを出す
+- D24: 祝日の表は holiday_jp から 2000 年以降の日付と名前だけを取り出した小さな表（PWA のバンドルを小さくする）
+
+## 依存を足す理由
+- @holiday-jp/holiday_jp（§8 のとおり。core）
+- fake-indexeddb は Phase 2 で足す（Dexie の単体テスト）

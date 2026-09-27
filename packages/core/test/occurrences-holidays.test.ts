@@ -85,3 +85,17 @@ describe('祝日（§21: 2026-09-21/22/23、2026-10-12）', () => {
     ]);
   });
 });
+
+describe('祝日の表（scripts/gen-holidays.mjs）', () => {
+  it('@holiday-jp/holiday_jp の 2000 年以降の表と一致する（依存を上げたら作り直す）', async () => {
+    const lib = (await import('@holiday-jp/holiday_jp/lib/holidays')).default as Record<
+      string,
+      { name: string }
+    >;
+    const expected = Object.keys(lib)
+      .filter((d) => d >= '2000-01-01')
+      .sort()
+      .map((d) => ({ date: d, name: lib[d]?.name }));
+    expect(holidaysBetween('2000-01-01', '2100-01-01')).toEqual(expected);
+  });
+});

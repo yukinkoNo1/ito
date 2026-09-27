@@ -359,3 +359,74 @@ export function projectEvent(r: EventRecord, viewerId: string | null): EventDTO 
 export function maxEndOfTimed(startAtMs: number): number {
   return fromJst(addDays(toJstParts(startAtMs).date, 2));
 }
+
+/** EventDTO → EventRecord（PWA で手元の変更を当てるため。中身を見てよい予定にだけ使う） */
+export function dtoToRecord(dto: EventDTO): EventRecord {
+  return {
+    id: dto.id,
+    version: dto.version,
+    title: dto.title ?? '',
+    note: dto.note,
+    location: dto.location,
+    allDay: dto.allDay,
+    startAt: dto.startAt ? parseIsoToMs(dto.startAt) : null,
+    endAt: dto.endAt ? parseIsoToMs(dto.endAt) : null,
+    startDate: dto.startDate ?? null,
+    endDate: dto.endDate ?? null,
+    rrule: dto.rrule,
+    exdates: [...dto.exdates],
+    parentId: dto.parentId,
+    recurrenceId: dto.recurrenceId,
+    memberIds: [...dto.memberIds],
+    forEveryone: dto.forEveryone,
+    busy: dto.busy,
+    visibility: dto.visibility,
+    ownerId: dto.ownerId,
+    createdBy: dto.createdBy,
+    updatedBy: dto.updatedBy,
+    deletedBy: null,
+    createdAt: dto.createdAt ? (parseIsoToMs(dto.createdAt) ?? 0) : 0,
+    updatedAt: dto.updatedAt ? (parseIsoToMs(dto.updatedAt) ?? 0) : 0,
+    deletedAt: null,
+  };
+}
+
+/** 手元で作る（オフライン作成）。サーバーと同じ検証を通す */
+export function createLocally(
+  input: EventCreate,
+  id: string,
+  meId: string,
+  nowMs: number,
+): { value: EventDTO } | { errors: FieldError[] } {
+  const fields = fieldsFromCreate(input, meId);
+  if ('errors' in fields) return fields;
+  const record: EventRecord = {
+    id,
+    version: 0,
+    ...fields.value,
+    exdates: [],
+    parentId: null,
+    recurrenceId: null,
+    ownerId: meId,
+    createdBy: meId,
+    updatedBy: meId,
+    deletedBy: null,
+    createdAt: nowMs,
+    updatedAt: nowMs,
+    deletedAt: null,
+  };
+  return { value: recordToDto(record) };
+}
+
+/** 手元で変更を当てる（サーバーと同じ検証）。version はサーバーが上げるので変えない */
+export function applyChangesLocally(
+  dto: EventDTO,
+  changes: EventChanges,
+  meId: string,
+  nowMs: number,
+): { value: EventDTO } | { errors: FieldError[] } {
+  const current = dtoToRecord(dto);
+  const fields = fieldsFromChanges(current, changes);
+  if ('errors' in fields) return fields;
+  return { value: recordToDto({ ...current, ...fields.value, updatedBy: meId, updatedAt: nowMs }) };
+}

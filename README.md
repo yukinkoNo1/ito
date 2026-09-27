@@ -50,6 +50,17 @@ docker compose up -d --build
 - バックアップ: `/data/backups` を restic の対象にする。復元はコンテナを止め、`/data` の `ito.db-wal` と `ito.db-shm` を消してから `ito.db` を差し替えて起動する
 - 監視: `docker compose ps` のヘルスと、ログの `level>=40`（warn 以上）
 
+### いえボードとつなぐ（連携キー。SPEC §13.1・§20）
+```sh
+docker compose exec app node dist/cli.js feed-token create --name いえボード   # キーはこの 1 回だけ表示。家族の名前・略称の一覧も出る
+docker compose exec app node dist/cli.js feed-token list                      # 名前・作成日・最終利用・人の端末から使われたか・止めたか（キーは出さない）
+docker compose exec app node dist/cli.js feed-token revoke <id>               # 止める（次の要求から 401）
+```
+- キーはいえボードの `config/secrets.yaml` に書く。入れ替えるときは、新しいキーを作る → いえボードを切り替える → 古いキーを止める（有効なキーは 5 つまで）
+- いえボードがまだ人の PC で動いているなら `app.env` に `FEED_ALLOW_USER_DEVICES=true` を書き、`tag:ieboard` の端末に移したら消す
+- キーを表示せずに動作を確かめる: `docker compose exec -T app node --input-type=module - < ../scripts/feed-check-inner.mjs`（確認用のキーを作って要求し、止めて、状態コードだけを出す）
+- 開発中は `pnpm feed-token create --name テスト` / `pnpm feed-token list`（開発用 DB）、`node scripts/feed-check.mjs`（ビルド済みのサーバーで確認）
+
 ## 家族の端末のセットアップ（SPEC 付録B）
 
 **iPhone**

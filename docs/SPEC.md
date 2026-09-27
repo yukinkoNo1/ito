@@ -3,7 +3,7 @@
 > 対象読者: 実装担当（Claude Code）と開発者本人。**このファイルが仕様の唯一の正**。実装中に仕様と違う判断をしたら §24 決定ログに追記する。
 > 作成日: 2026-09-27 ／ アプリ名「いと」（糸）は仮称。家族一人ひとりを1本の糸として描くデザインから。
 > v1.1（2026-09-27）: リビングの家族ダッシュボード「いえボード」に予定を渡す**表示用フィード**を追加（§13.1。関連して §1・2・3・5・7・9・10・13・14・18・19・20・21・23・24・25・付録A を更新。メンバーの名前の重複禁止と、Tailscale の全許可の規則の送信元を人の端末に絞る変更を含む）。いと の画面は変えていない（§22 はそのまま）。
-> v1.2（自走中の変更）: §24（D15〜）、付録A（STATIC_DIR・MAX_MEMBERS の上限）
+> v1.2（自走中の変更）: §24（D15〜）、§10（feed_tokens の last_user_device_at）、付録A（STATIC_DIR・MAX_MEMBERS の上限）
 
 ## 目次
 1. 概要とゴール / 2. 前提・制約 / 3. 用語 / 4. ユーザーストーリー / 5. 機能一覧 / 6. 画面構成と遷移 / 7. システム構成 / 8. 技術スタック / 9. リポジトリ構成 / 10. データモデル / 11. 日時・終日・繰り返し / 12. 同期（ローカルファースト） / 13. API（13.1 表示用フィード） / 14. 認証・認可 / 15. 通知 / 16. 一言入力（AI解析） / 17. PWA / 18. セキュリティ / 19. 非機能要件 / 20. デプロイと運用 / 21. テスト戦略 / 22. UI契約とUI統合 / 23. 実装フェーズと受け入れ基準 / 24. 決定ログ / 25. 将来の拡張 / 付録A 環境変数 / 付録B 家族の端末セットアップ
@@ -299,7 +299,7 @@ SQLite。ID は UUIDv7（時刻順に並ぶ）。時刻は epoch ミリ秒（UTC
 | idempotency_keys | key, member_id（PK 複合）, response(JSON), created_at | 再送の重複防止（48 時間） |
 | ai_usage | id, member_id, created_at, ok, source, latency_ms, input_tokens, output_tokens | 回数制限と費用の把握。**入力文は保存しない** |
 | app_settings | key PK, value(JSON) | メンバー上限など |
-| feed_tokens | id, name, scope（`display`）, token_hash UNIQUE, created_at, last_used_at, revoked_at | 連携キー（§13.1）。キーそのものは保存しない（SHA-256 だけ） |
+| feed_tokens | id, name, scope（`display`）, token_hash UNIQUE, created_at, last_used_at, last_user_device_at, revoked_at | 連携キー（§13.1）。キーそのものは保存しない（SHA-256 だけ）。last_user_device_at は人の端末から最後に使われた時刻（§24 D21） |
 
 ### 閲覧者ごとの投影（非公開の強制）
 `projectEvent(event, viewerId)` をサーバーの**すべての出口**（同期・履歴・通知・書き出し・ゴミ箱・検索・**409 の本文**・エラー応答）で必ず通す。他人の非公開予定（例外行を含む）は次の形だけを返す:
@@ -1535,6 +1535,10 @@ export interface OfflineBannerProps {
 | D18 | 管理者の自動登録で名前がほかの有効なメンバーとぶつかったら、20 文字に収まるように末尾に 2, 3… を付ける。色は §22 の順で、まだ使われていない最初の色。略称は名前の最初の 1 文字 | §10 の名前・色の重複禁止と自動登録を両立させる | 登録を拒否する |
 | D19 | 手元の開発・テストは Node 22.12 以上でも行えるようにする（本番のイメージは node:24-slim）。react-router は 7 系に固定する | 開発機に Node 24 がなく、管理者権限のインストールは持ち主の作業（PROGRESS の要確認）。react-router 8 は Node 22.22 以上を要求する。Node 24 にしかない API は使わない | 手元でも Node 24 を必須にする |
 | D20 | 開発モード（AUTH_MODE=dev）の「人の端末からの要求」は X-Dev-Login が付いた要求とする（DEV_LOGIN の既定の本人は数えない） | 本番の Tailscale-User-Login の有無に当たるものを開発モードでも試せるように（§13.1 の FEED_ALLOW_USER_DEVICES） | 開発モードではいつも人の端末とみなす |
+| D21 | feed_tokens に `last_user_device_at`（人の端末から最後に使われた時刻。last_used_at と同じく 5 分に 1 回まで書く）を足す（§10 の表に追記） | §13.1 の `feed-token list` に「人の端末から使われた」と出すため | 使われたかどうかの真偽だけ |
+| D22 | 予定の API の細則: 更新・削除・復元でも Idempotency-Key があれば効かせる（作成は必須）／ゴミ箱の予定への更新・削除は 410、ない予定は 404／担当なし（全員でもない）の予定は作れない／他人の非公開はゴミ箱に出さない／終日の予定は 366 日まで・日付は 1970〜2100 年 | 通信が切れて応答だけ失われた更新の再送が、自分の変更と 409 にならないように。§12 の 404/410 の扱いに合わせる。表示が膨らまないように | 更新の Idempotency-Key を無視する |
+| D23 | 連携キーの確認（§23 Phase 1）は、キーを表示しないスクリプト（scripts/feed-check.mjs・feed-check-inner.mjs）で create → 要求 → revoke → 要求 を行い、状態コードだけを出す。Docker の中では `docker compose exec -T app node --input-type=module - < scripts/feed-check-inner.mjs` | 連携キーを画面・会話・ログに出さない（RUNBOOK 4.） | curl でキーを手で貼る |
+| D24 | 祝日の表は @holiday-jp/holiday_jp の表から 2000 年以降の「日付と名前」だけを取り出した小さな表（scripts/gen-holidays.mjs で生成）を使う。ライブラリの表と一致することを core のテストで確かめる | ライブラリの表（1970〜2050 年、英語名つき 231KB）をそのまま PWA に入れると、§19 の JS 200KB（gzip）を圧迫する | ライブラリの表をそのまま読む |
 
 ## 25. 将来の拡張（今回は作らない）
 iPhone のカレンダーから購読できる ICS フィード（Tailscale 接続時のみ有効。`feed_tokens` に本人用のスコープを足せば、連携キーの仕組みをそのまま使える）、いえボードに祝日・留守（複数日の busy の終日予定）を出す（フィードにはもう入っている。いえボード側の作業）、Google カレンダーからの取り込み、写真の添付、六曜、移動時間、インターネット公開時のパスキー認証。
