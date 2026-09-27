@@ -6,6 +6,7 @@ export const LOGINS = {
   papa: 'papa@example.com',
   mama: 'mama@example.com',
   haru: 'haruto@example.com',
+  saki: 'saki@example.com',
 } as const;
 export type Who = keyof typeof LOGINS;
 
@@ -55,7 +56,33 @@ export async function ensureFamily(request: APIRequestContext): Promise<void> {
       color: 'asagi',
     });
   }
+  if (!have.has(LOGINS.saki)) {
+    await api(request, 'papa', 'POST', '/api/members', {
+      login: LOGINS.saki,
+      name: 'さき',
+      mark: 'さ',
+      color: 'momo',
+    });
+  }
   membersReady = true;
+}
+
+/** 「これから」が開いた（本番の UI。§6.3 S-01） */
+export function homeList(page: Page) {
+  return page.getByRole('region', { name: 'これからの予定' });
+}
+
+/** 下のナビ（C-01） */
+export function navTo(page: Page, label: 'これから' | '月' | '空き' | '設定') {
+  return page.getByRole('navigation', { name: 'メイン' }).getByRole('button', {
+    name: label,
+    exact: true,
+  });
+}
+
+/** 入力バー（C-01 の「予定を書く」） */
+export function composerTrigger(page: Page) {
+  return page.getByRole('button', { name: /^＋\s*予定を書く/ });
 }
 
 /** そのブラウザのコンテキストを、開発用のログインでその人にする */

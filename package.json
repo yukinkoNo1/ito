@@ -21,6 +21,7 @@
     "feed-token": "pnpm --filter @ito/server run --silent cli feed-token"
   },
   "devDependencies": {
+    "@axe-core/playwright": "4.13.0",
     "@biomejs/biome": "2.5.14",
     "@playwright/test": "1.63.0",
     "@types/node": "24.19.0",

@@ -11,7 +11,6 @@
       "**",
       "!!**/dist",
       "!!**/dist-e2e",
-      "!!design/ui-export",
       "!!docs",
       "!!apps/server/drizzle",
       "!!.tools",
@@ -37,8 +36,23 @@
       },
       "suspicious": {
         "noExplicitAny": "error"
+      },
+      "a11y": {
+        "noLabelWithoutControl": {
+          "level": "error",
+          "options": { "inputComponents": ["Input", "Textarea"] }
+        }
       }
     }
+  },
+  "overrides": [
+    {
+      "includes": ["apps/web/src/ui/**/*.css"],
+      "linter": { "rules": { "style": { "noDescendingSpecificity": "off" } } }
+    }
+  ],
+  "css": {
+    "parser": { "tailwindDirectives": true }
   },
   "javascript": {
     "formatter": {

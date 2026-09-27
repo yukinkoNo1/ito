@@ -10,15 +10,19 @@
     "typecheck": "tsc -p tsconfig.json && tsc -p tsconfig.sw.json"
   },
   "dependencies": {
+    "@fontsource/geist-mono": "5.3.0",
+    "@fontsource/instrument-serif": "5.3.0",
     "@ito/core": "workspace:*",
     "dexie": "4.4.6",
     "dexie-react-hooks": "4.4.0",
+    "lucide-react": "1.48.0",
     "react": "19.3.0",
     "react-dom": "19.3.0",
     "react-router": "7.18.4",
     "zod": "4.6.5"
   },
   "devDependencies": {
+    "@resvg/resvg-js": "2.6.2",
     "@tailwindcss/vite": "4.3.3",
     "@types/react": "19.3.0",
     "@types/react-dom": "19.3.0",

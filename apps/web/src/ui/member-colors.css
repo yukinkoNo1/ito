@@ -1,0 +1,187 @@
+/* 自動生成（scripts/gen-member-colors.mjs）。styles.css の asagi の規則をひな形にした、残りの家族の色。手で書き換えない */
+
+.dot--wakakusa {
+  background: var(--m-wakakusa-thread);
+}
+
+.thread--wakakusa,
+.node--wakakusa {
+  color: var(--m-wakakusa-thread);
+}
+
+.member-tag--wakakusa {
+  color: var(--m-wakakusa-text);
+  background: color-mix(in oklab, var(--m-wakakusa-thread) 10%, var(--paper));
+}
+
+[data-theme="dark"] .member-tag--wakakusa {
+  background: color-mix(in oklab, var(--m-wakakusa-thread) 20%, var(--paper));
+}
+
+.month-event--wakakusa {
+  color: var(--m-wakakusa-text);
+}
+
+.month-span--wakakusa {
+  background: var(--m-wakakusa-thread);
+}
+
+.timeline-legend--wakakusa i {
+  background: var(--m-wakakusa-thread);
+}
+
+.availability-lane--wakakusa {
+  color: var(--m-wakakusa-thread);
+}
+
+.search-person--wakakusa {
+  color: var(--m-wakakusa-text);
+}
+
+.dot--fuji {
+  background: var(--m-fuji-thread);
+}
+
+.thread--fuji,
+.node--fuji {
+  color: var(--m-fuji-thread);
+}
+
+.member-tag--fuji {
+  color: var(--m-fuji-text);
+  background: color-mix(in oklab, var(--m-fuji-thread) 10%, var(--paper));
+}
+
+[data-theme="dark"] .member-tag--fuji {
+  background: color-mix(in oklab, var(--m-fuji-thread) 20%, var(--paper));
+}
+
+.month-event--fuji {
+  color: var(--m-fuji-text);
+}
+
+.month-span--fuji {
+  background: var(--m-fuji-thread);
+}
+
+.timeline-legend--fuji i {
+  background: var(--m-fuji-thread);
+}
+
+.availability-lane--fuji {
+  color: var(--m-fuji-thread);
+}
+
+.search-person--fuji {
+  color: var(--m-fuji-text);
+}
+
+.dot--ruri {
+  background: var(--m-ruri-thread);
+}
+
+.thread--ruri,
+.node--ruri {
+  color: var(--m-ruri-thread);
+}
+
+.member-tag--ruri {
+  color: var(--m-ruri-text);
+  background: color-mix(in oklab, var(--m-ruri-thread) 10%, var(--paper));
+}
+
+[data-theme="dark"] .member-tag--ruri {
+  background: color-mix(in oklab, var(--m-ruri-thread) 20%, var(--paper));
+}
+
+.month-event--ruri {
+  color: var(--m-ruri-text);
+}
+
+.month-span--ruri {
+  background: var(--m-ruri-thread);
+}
+
+.timeline-legend--ruri i {
+  background: var(--m-ruri-thread);
+}
+
+.availability-lane--ruri {
+  color: var(--m-ruri-thread);
+}
+
+.search-person--ruri {
+  color: var(--m-ruri-text);
+}
+
+.dot--kaki {
+  background: var(--m-kaki-thread);
+}
+
+.thread--kaki,
+.node--kaki {
+  color: var(--m-kaki-thread);
+}
+
+.member-tag--kaki {
+  color: var(--m-kaki-text);
+  background: color-mix(in oklab, var(--m-kaki-thread) 10%, var(--paper));
+}
+
+[data-theme="dark"] .member-tag--kaki {
+  background: color-mix(in oklab, var(--m-kaki-thread) 20%, var(--paper));
+}
+
+.month-event--kaki {
+  color: var(--m-kaki-text);
+}
+
+.month-span--kaki {
+  background: var(--m-kaki-thread);
+}
+
+.timeline-legend--kaki i {
+  background: var(--m-kaki-thread);
+}
+
+.availability-lane--kaki {
+  color: var(--m-kaki-thread);
+}
+
+.search-person--kaki {
+  color: var(--m-kaki-text);
+}
+
+/* 履歴の人の名前（書き出しで使っていたが CSS がなかった） */
+
+.member-text--yamabuki {
+  color: var(--m-yamabuki-text);
+}
+
+.member-text--wakakusa {
+  color: var(--m-wakakusa-text);
+}
+
+.member-text--wakatake {
+  color: var(--m-wakatake-text);
+}
+
+.member-text--asagi {
+  color: var(--m-asagi-text);
+}
+
+.member-text--fuji {
+  color: var(--m-fuji-text);
+}
+
+.member-text--momo {
+  color: var(--m-momo-text);
+}
+
+.member-text--ruri {
+  color: var(--m-ruri-text);
+}
+
+.member-text--kaki {
+  color: var(--m-kaki-text);
+}

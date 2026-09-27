@@ -1,7 +1,12 @@
+import { readFileSync } from 'node:fs';
 import tailwindcss from '@tailwindcss/vite';
 import react from '@vitejs/plugin-react';
 import { defineConfig } from 'vite';
 import { VitePWA } from 'vite-plugin-pwa';
+
+const pkg = JSON.parse(readFileSync(new URL('./package.json', import.meta.url), 'utf8')) as {
+  version: string;
+};
 
 // E2E 用のビルド（--mode e2e）は別のフォルダに出す（ギャラリーは E2E 用のビルドにだけ入れる。RUNBOOK 3.）
 export default defineConfig(({ mode }) => ({
@@ -46,11 +51,14 @@ export default defineConfig(({ mode }) => ({
   ],
   define: {
     __ITO_E2E__: JSON.stringify(mode === 'e2e'),
+    __ITO_VERSION__: JSON.stringify(pkg.version),
   },
   build: {
     outDir: mode === 'e2e' ? 'dist-e2e' : 'dist',
     emptyOutDir: true,
     sourcemap: false,
+    // フォント・画像を data: URI に埋め込まない（CSP の font-src 'self'。§18）
+    assetsInlineLimit: 0,
   },
   server: {
     port: 5173,

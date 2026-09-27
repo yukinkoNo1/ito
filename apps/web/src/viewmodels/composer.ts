@@ -1,5 +1,14 @@
-import { addDays, defaultBusy, diffDays, isValidDate } from '@ito/core';
+import {
+  addDays,
+  defaultBusy,
+  diffDays,
+  isValidDate,
+  minutesOfTime,
+  timeFromMinutes,
+} from '@ito/core';
 import type { EventDraftVM } from '../ui/types';
+
+const MINUTES_PER_DAY = 24 * 60;
 
 /**
  * 下書きに変更を当てる（書く画面の札・入力欄から）。
@@ -21,6 +30,24 @@ export function applyDraftPatch(
   ) {
     const length = Math.max(0, diffDays(draft.startDate, draft.endDate));
     next.endDate = addDays(patch.startDate, length);
+  }
+  // 開始の時刻を動かしたら、終わりの時刻も同じだけ動かす（長さを保つ。§6.2「予定の時刻を直す」）
+  if (
+    patch.startTime &&
+    patch.endTime === undefined &&
+    !next.allDay &&
+    draft.startTime &&
+    draft.endTime
+  ) {
+    const length =
+      diffDays(draft.startDate, draft.endDate) * MINUTES_PER_DAY +
+      minutesOfTime(draft.endTime) -
+      minutesOfTime(draft.startTime);
+    if (length > 0 && length < MINUTES_PER_DAY) {
+      const end = minutesOfTime(patch.startTime) + length;
+      next.endTime = timeFromMinutes(end % MINUTES_PER_DAY);
+      next.endDate = end >= MINUTES_PER_DAY ? addDays(next.startDate, 1) : next.startDate;
+    }
   }
   if (next.allDay && next.endDate < next.startDate) next.endDate = next.startDate;
   if (!next.allDay && next.endDate > addDays(next.startDate, 1)) next.endDate = next.startDate;

@@ -1,22 +1,29 @@
-import { type ReactNode, useEffect, useState } from 'react';
+import { lazy, type ReactNode, Suspense, useEffect, useState } from 'react';
 import { BrowserRouter, Navigate, Route, Routes, useLocation } from 'react-router';
-import { ActivityPage } from '../features/activity/ActivityPage';
-import { ComposerOverlay } from '../features/composer/ComposerOverlay';
-import { EventPage } from '../features/event/EventPage';
-import { FlowPage } from '../features/flow/FlowPage';
-import { InstallPage } from '../features/install/InstallPage';
-import { MonthPage } from '../features/month/MonthPage';
-import { WelcomePage } from '../features/onboarding/WelcomePage';
-import { MembersPage } from '../features/settings/MembersPage';
-import { SettingsPage } from '../features/settings/SettingsPage';
-import { TrashPage } from '../features/trash/TrashPage';
+import { ActivityContainer } from '../features/activity/ActivityContainer';
+import { FlowContainer } from '../features/flow/FlowContainer';
+import { FreeContainer } from '../features/free/FreeContainer';
+import { InstallContainer } from '../features/install/InstallContainer';
+import { MonthContainer } from '../features/month/MonthContainer';
+import { OnboardingContainer } from '../features/onboarding/OnboardingContainer';
+import { SearchContainer } from '../features/search/SearchContainer';
+import { MembersContainer } from '../features/settings/MembersContainer';
+import { SettingsContainer } from '../features/settings/SettingsContainer';
+import { ShellLayout } from '../features/shell/ShellLayout';
+import { TrashContainer } from '../features/trash/TrashContainer';
 import { DEVICE_KEYS, readDevice } from '../pwa/device';
 import { registerServiceWorker } from '../pwa/register';
-import { DataProvider } from './data-context';
+import { applyTheme, readThemeSetting } from './appearance';
+import { DataProvider, useMe } from './data-context';
 import { FreshProvider } from './fresh';
-import { Shell } from './Shell';
+import { NavProvider, useNav } from './nav';
 import { ToastProvider } from './toast';
 import { UpdateContext } from './update';
+import { ViewDateProvider } from './view-date';
+
+/** 状態のギャラリー（開発と E2E 用のビルドにだけ入れる。本番のビルドでは分岐ごと消える。RUNBOOK 3.） */
+const Gallery =
+  import.meta.env.DEV || __ITO_E2E__ ? lazy(() => import('../ui/gallery/Gallery')) : null;
 
 /** はじめての端末は S-11 へ（ホーム画面に追加ガイドは見られる） */
 function OnboardingGate({ children }: { children: ReactNode }) {
@@ -28,36 +35,65 @@ function OnboardingGate({ children }: { children: ReactNode }) {
   return <>{children}</>;
 }
 
+/** テーマは家族の設定（me.settings.theme）に合わせる。まだ読めていなければ端末に写しておいたもの（§22） */
+function AppearanceSync() {
+  const theme = useMe()?.settings.theme;
+  useEffect(() => applyTheme(theme ?? readThemeSetting()), [theme]);
+  return null;
+}
+
+/** 詳細（/e/:id）は開く前の画面（背景）の上にシートとして重ねる（§6.3 S-04） */
+function AppRoutes() {
+  const { base } = useNav();
+  return (
+    <OnboardingGate>
+      <Routes location={base}>
+        <Route path="/welcome" element={<OnboardingContainer />} />
+        <Route path="/install" element={<InstallContainer />} />
+        <Route element={<ShellLayout />}>
+          <Route path="/" element={<FlowContainer />} />
+          <Route path="/month/:ym?" element={<MonthContainer />} />
+          <Route path="/free" element={<FreeContainer />} />
+          <Route path="/search" element={<SearchContainer />} />
+          <Route path="/settings" element={<SettingsContainer />} />
+          <Route path="/settings/members" element={<MembersContainer />} />
+          <Route path="/activity" element={<ActivityContainer />} />
+          <Route path="/trash" element={<TrashContainer />} />
+          <Route path="*" element={<Navigate to="/" replace />} />
+        </Route>
+      </Routes>
+    </OnboardingGate>
+  );
+}
+
 export function App() {
   const [applyUpdate, setApplyUpdate] = useState<(() => void) | null>(null);
+  const galleryPage = Gallery !== null && window.location.pathname === '/__gallery';
   useEffect(() => {
-    registerServiceWorker((apply) => setApplyUpdate(() => apply));
-  }, []);
+    if (!galleryPage) registerServiceWorker((apply) => setApplyUpdate(() => apply));
+  }, [galleryPage]);
+
+  // ギャラリーは同期も SW も使わない（見本のデータだけで描く）
+  if (Gallery && galleryPage) {
+    return (
+      <Suspense fallback={null}>
+        <Gallery />
+      </Suspense>
+    );
+  }
   return (
     <DataProvider>
+      <AppearanceSync />
       <FreshProvider>
         <ToastProvider>
           <UpdateContext.Provider value={applyUpdate}>
-            <BrowserRouter>
-              <Shell>
-                <OnboardingGate>
-                  <Routes>
-                    <Route path="/" element={<FlowPage />} />
-                    <Route path="/month/:ym" element={<MonthPage />} />
-                    <Route path="/month" element={<MonthPage />} />
-                    <Route path="/e/:eventId" element={<EventPage />} />
-                    <Route path="/settings" element={<SettingsPage />} />
-                    <Route path="/settings/members" element={<MembersPage />} />
-                    <Route path="/activity" element={<ActivityPage />} />
-                    <Route path="/trash" element={<TrashPage />} />
-                    <Route path="/welcome" element={<WelcomePage />} />
-                    <Route path="/install" element={<InstallPage />} />
-                    <Route path="*" element={<FlowPage />} />
-                  </Routes>
-                  <ComposerOverlay />
-                </OnboardingGate>
-              </Shell>
-            </BrowserRouter>
+            <ViewDateProvider>
+              <BrowserRouter>
+                <NavProvider>
+                  <AppRoutes />
+                </NavProvider>
+              </BrowserRouter>
+            </ViewDateProvider>
           </UpdateContext.Provider>
         </ToastProvider>
       </FreshProvider>

@@ -1,0 +1,191 @@
+/*
+ * Phase 6 で足した状態のスタイル（§22 の型に合わせたときに増えた要素）。
+ * 書き出しの styles.css の書き方（rem・トークン）に合わせ、既存の見た目は変えない。
+ */
+
+/* S-01: 月の区切り見出し（FlowItem month） */
+.month-divider {
+  position: relative;
+  padding: 1rem 1rem 0.375rem 3.5rem;
+  border-bottom: 0.0625rem solid var(--rule);
+  color: var(--ink-2);
+  font-family: "Instrument Serif", "Hiragino Mincho ProN", serif;
+  font-size: 1.25rem;
+  line-height: 1.2;
+}
+
+/* S-01: 見出しの下の同期状態 */
+.topbar .flow-sync {
+  margin-top: 0.125rem;
+  color: var(--ink-3);
+  font-size: 0.8125rem;
+}
+
+/* S-01: 行と現在時刻線 */
+.flow-row {
+  position: relative;
+}
+
+.now-line {
+  position: relative;
+  z-index: 4;
+  height: 0.125rem;
+  margin-left: 3.5rem;
+  background: var(--shu);
+}
+
+.now-line::before {
+  position: absolute;
+  top: 50%;
+  left: -0.3125rem;
+  width: 0.625rem;
+  height: 0.625rem;
+  border-radius: 50%;
+  background: var(--shu);
+  content: "";
+  transform: translateY(-50%);
+}
+
+/* S-01: 上下の追加読み込みの目印（見えない） */
+.flow-sentinel {
+  height: 0.0625rem;
+}
+
+/* S-01: 週の帯で、いま見ている日 */
+.week-days .week-day--selected strong {
+  border-color: var(--ink);
+  color: var(--paper);
+  background: var(--ink);
+}
+
+.week-days .week-day--today.week-day--selected strong {
+  border-color: var(--accent);
+  color: var(--on-accent);
+  background: var(--accent);
+}
+
+/* C-01: 画面の中身（シートを開いているあいだは inert）。並びは今までどおり .app-shell の flex の中 */
+.app-shell-content {
+  display: contents;
+}
+
+/* C-03: シートを開いているあいだのトースト（シートの上。§6.1「元に戻す」を 5 秒） */
+.toast-layer {
+  position: absolute;
+  z-index: 60;
+  right: 0;
+  bottom: calc(1rem + env(safe-area-inset-bottom));
+  left: 0;
+  height: 0;
+}
+
+/* C-01: 下の帯の上に画面から描く行（「今日に戻る」） */
+.bottom-slot:empty {
+  display: none;
+}
+
+/* C-02: つながらないときの 1 行（「再試行」「更新」付き） */
+.connection-state--action {
+  display: flex;
+  height: auto;
+  min-height: 2.75rem;
+  padding: 0 0 0 1rem;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  text-align: left;
+}
+
+.connection-state--action > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.connection-state--action .ui-button {
+  flex: none;
+  padding: 0 0.75rem;
+  color: var(--accent);
+  font-size: 0.8125rem;
+  font-weight: 700;
+}
+
+/* C-03: トーストの種類（「元に戻す」以外） */
+.undo-bar--info {
+  border-left-color: var(--rule-strong);
+}
+
+.undo-bar--error {
+  border-left-color: var(--sun);
+  color: var(--ink);
+}
+
+/* S-04: 作成・更新 */
+.detail-meta {
+  margin: 1rem 1rem 0;
+  color: var(--ink-3);
+  font-size: 0.8125rem;
+}
+
+/* S-07・S-07b: 名前・略称などを書き換える小さなフォーム */
+.setting-text-form {
+  display: grid;
+  padding: 0.75rem 1rem 1rem;
+  gap: 0.5rem;
+}
+
+.setting-text-form .ui-input {
+  min-height: 2.75rem;
+  padding: 0 0.75rem;
+  border: 0.0625rem solid var(--rule-strong);
+  border-radius: 0.375rem;
+  color: var(--ink);
+  background: var(--paper);
+  font-size: 1rem;
+}
+
+.setting-text-form p {
+  margin: 0;
+  color: var(--ink-3);
+  font-size: 0.8125rem;
+}
+
+.setting-text-form label {
+  display: grid;
+  gap: 0.25rem;
+  color: var(--ink-2);
+  font-size: 0.8125rem;
+}
+
+/* S-07b: 行の 2 行目（ログイン） */
+.setting-row-sub {
+  display: block;
+  color: var(--ink-3);
+  font-size: 0.8125rem;
+}
+
+/* S-08: もっと見る */
+.history-more {
+  width: 100%;
+  min-height: 2.75rem;
+  color: var(--accent);
+  font-size: 0.8125rem;
+  font-weight: 700;
+}
+
+/* 本体の html・body・#root（画面は .app-shell が 100dvh を持つ） */
+html,
+body {
+  height: 100%;
+  margin: 0;
+  color: var(--ink);
+  background: var(--paper);
+}
+
+body {
+  -webkit-text-size-adjust: 100%;
+}
+
+#root {
+  height: 100%;
+}

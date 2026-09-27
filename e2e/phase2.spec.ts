@@ -2,7 +2,7 @@ import { readFileSync, writeFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import type { APIRequestContext, Page } from '@playwright/test';
 import { expect, test } from './fixtures';
-import { api, ensureFamily, ORIGIN } from './helpers';
+import { api, composerTrigger, ensureFamily, homeList, navTo, ORIGIN } from './helpers';
 
 const SW_PATH = fileURLToPath(new URL('../apps/web/dist-e2e/sw.js', import.meta.url));
 // 許すのは、テストで意図して失敗させた /api/ への要求だけ（アプリシェル・アイコン・manifest などの失敗は許さない）
@@ -58,25 +58,29 @@ function tomorrowIso(): string {
 
 async function editTitle(page: Page, from: string, to: string) {
   await page.goto('/');
-  await page
+  await homeList(page)
     .getByRole('button', { name: new RegExp(from) })
     .first()
     .click();
-  await expect(page.getByRole('article', { name: '予定の詳細' })).toBeVisible();
-  await page.getByRole('button', { name: '編集' }).click();
+  const detail = page.getByRole('dialog', { name: '予定の詳細' });
+  await expect(detail).toBeVisible();
+  await detail.getByRole('button', { name: '編集' }).click();
   const dialog = page.getByRole('dialog', { name: '予定を書く' });
   await dialog.getByLabel('件名').fill(to);
-  await dialog.getByRole('button', { name: '保存' }).click();
+  await dialog.getByRole('button', { name: /に変更$/ }).click();
   await expect(dialog).toBeHidden();
+  await detail.getByRole('button', { name: '閉じる' }).click();
+  await expect(detail).toBeHidden();
   await page.goto('/');
 }
 
-async function composeOn(page: Page, title: string, day: string) {
-  await page.getByRole('button', { name: '予定を書く' }).click();
+/** 入力バーから書く（明日の札を選ぶ） */
+async function composeTomorrow(page: Page, title: string) {
+  await composerTrigger(page).click();
   const dialog = page.getByRole('dialog', { name: '予定を書く' });
-  await dialog.getByLabel('件名').fill(title);
-  await dialog.getByLabel('日付').fill(day);
-  await dialog.getByRole('button', { name: '保存' }).click();
+  await dialog.getByLabel('予定を一言で入力').fill(title);
+  await dialog.getByRole('button', { name: '明日', exact: true }).click();
+  await dialog.getByRole('button', { name: /に保存$/ }).click();
   await expect(dialog).toBeHidden();
 }
 
@@ -102,8 +106,8 @@ test.describe('オフライン', () => {
     await page.reload();
     await expect(page.getByText('E2E オフラインで見る')).toBeVisible();
 
-    await composeOn(page, 'E2E オフラインで書く', day);
-    const row = page.getByRole('button', { name: /E2E オフラインで書く/ });
+    await composeTomorrow(page, 'E2E オフラインで書く');
+    const row = homeList(page).getByRole('button', { name: /E2E オフラインで書く/ });
     await expect(row).toContainText('未送信');
     await expect(page.getByText('家のサーバーにつながりません')).toBeVisible();
 
@@ -126,9 +130,9 @@ test.describe('オフライン', () => {
     await editTitle(page, 'E2E 二回編集', 'E2E 二回編集 A');
     await editTitle(page, 'E2E 二回編集 A', 'E2E 二回編集 B');
     await context.setOffline(false);
-    const row = page.getByRole('button', { name: /E2E 二回編集 B/ });
+    const row = homeList(page).getByRole('button', { name: /E2E 二回編集 B/ });
     await expect(row).not.toContainText('未送信', { timeout: 15_000 });
-    await expect(row).not.toContainText('競合');
+    await expect(row).not.toContainText('変更がぶつかっています');
     expect(await serverTitles(request)).toContain('E2E 二回編集 B');
   });
 });
@@ -154,8 +158,8 @@ test.describe('API だけ遮断', () => {
     await expect(page.getByText('E2E 遮断前からある')).toBeVisible();
     await expect(page.getByText('家のサーバーにつながりません（Tailscale を確認）')).toBeVisible();
 
-    await composeOn(page, 'E2E 遮断中に書く', day);
-    const row = page.getByRole('button', { name: /E2E 遮断中に書く/ });
+    await composeTomorrow(page, 'E2E 遮断中に書く');
+    const row = homeList(page).getByRole('button', { name: /E2E 遮断中に書く/ });
     await expect(row).toContainText('未送信');
 
     await context.unroute('**/api/**');
@@ -182,7 +186,7 @@ test('背面に回して前面に戻したときも、そのあいだに増え�
 }) => {
   const day = tomorrowIso();
   await page.goto('/');
-  await expect(page.getByRole('heading', { name: 'これから' })).toBeVisible();
+  await expect(homeList(page)).toBeVisible();
   await setVisibility(page, 'hidden');
   await createAs(request, 'mama', {
     title: 'E2E 背面のあいだに増えた',
@@ -191,7 +195,7 @@ test('背面に回して前面に戻したときも、そのあいだに増え�
   });
   await setVisibility(page, 'visible');
   await expect(
-    page.locator('li[data-fresh="true"]', { hasText: 'E2E 背面のあいだに増えた' }),
+    page.locator('[data-fresh="true"]', { hasText: 'E2E 背面のあいだに増えた' }),
   ).toBeVisible();
 });
 
@@ -206,7 +210,7 @@ test('ホーム画面から開いている（インストール済み）とき�
     });
   });
   await page.goto('/');
-  await expect(page.getByRole('heading', { name: 'これから' })).toBeVisible();
+  await expect(homeList(page)).toBeVisible();
   await expect(page.getByRole('note')).toHaveCount(0);
 });
 
@@ -215,9 +219,9 @@ test('別のメンバーが追加した予定に「新」が付き、次に開�
   request,
 }) => {
   const day = tomorrowIso();
-  const fresh = page.locator('li[data-fresh="true"]', { hasText: 'E2E ふえた予定' });
+  const fresh = page.locator('[data-fresh="true"]', { hasText: 'E2E ふえた予定' });
   await page.goto('/');
-  await expect(page.getByRole('heading', { name: 'これから' })).toBeVisible();
+  await expect(homeList(page)).toBeVisible();
   // いったん閉じる（前回開いた時刻が保存される）
   await page.goto('about:blank');
   await createAs(request, 'mama', { title: 'E2E ふえた予定', allDay: true, startDate: day });
@@ -225,20 +229,20 @@ test('別のメンバーが追加した予定に「新」が付き、次に開�
   await expect(fresh).toBeVisible();
   await expect(page.getByRole('button', { name: /新しい予定 \d+件/ })).toBeVisible();
   // 同じ回のあいだ（アプリの中で画面を移っても）は消えない
-  await page.getByRole('link', { name: '月' }).click();
-  await page.getByRole('link', { name: 'これから' }).click();
+  await navTo(page, '月').click();
+  await navTo(page, 'これから').click();
   await expect(fresh).toBeVisible();
   // 次に開いたときには消える
   await page.goto('about:blank');
   await page.goto('/');
-  await expect(page.getByRole('button', { name: /E2E ふえた予定/ })).toBeVisible();
+  await expect(homeList(page).getByRole('button', { name: /E2E ふえた予定/ })).toBeVisible();
   await expect(fresh).toHaveCount(0);
 });
 
 test.describe('競合', () => {
   test.use({ allowedConsoleErrors: { patterns: [OFFLINE, CONFLICT] } });
 
-  for (const choice of ['家族の変更を採用', '自分の変更で上書き', '両方残す'] as const) {
+  for (const choice of ['家族の変更を使う', '自分の変更で上書き', '両方残す'] as const) {
     test(`競合を起こして解決する: ${choice}`, async ({ page, context, request }) => {
       const day = tomorrowIso();
       const title = `E2E 競合 ${choice}`;
@@ -262,20 +266,23 @@ test.describe('競合', () => {
       });
       expect(res.status()).toBe(200);
       await context.setOffline(false);
-      const row = page.getByRole('button', { name: new RegExp(`${title} 自分`) });
-      await expect(row).toContainText('競合', { timeout: 15_000 });
+      const list = homeList(page);
+      const row = list.getByRole('button', { name: new RegExp(`${title} 自分`) });
+      await expect(row).toContainText('変更がぶつかっています', { timeout: 15_000 });
       await row.click();
-      const resolver = page.getByRole('region', { name: '競合の解決' });
+      const detail = page.getByRole('dialog', { name: '予定の詳細' });
+      // 解決するまでは編集・削除できない（自分の変更が黙って消えないように。SYNC-01・§24 D28）
+      await expect(detail.getByRole('button', { name: '編集' })).toHaveCount(0);
+      await expect(detail.getByRole('button', { name: '削除' })).toHaveCount(0);
+      await detail.getByRole('button', { name: /家族の変更とぶつかっています/ }).click();
+      const resolver = page.getByRole('dialog', { name: '変更のぶつかりを解決' });
       await expect(resolver).toBeVisible();
-      // 解決するまでは編集・削除できない（自分の変更が黙って消えないように。SYNC-01）
-      await expect(page.getByRole('button', { name: '編集' })).toHaveCount(0);
-      await expect(page.getByRole('button', { name: '削除' })).toHaveCount(0);
-      await page.getByRole('button', { name: choice }).click();
+      await resolver.getByRole('button', { name: choice }).click();
       await expect(resolver).toHaveCount(0);
       await page.goto('/');
-      const mine = page.getByRole('button', { name: new RegExp(`${title} 自分`) });
-      const theirs = page.getByRole('button', { name: new RegExp(`${title} 家族`) });
-      if (choice === '家族の変更を採用') {
+      const mine = list.getByRole('button', { name: new RegExp(`${title} 自分`) });
+      const theirs = list.getByRole('button', { name: new RegExp(`${title} 家族`) });
+      if (choice === '家族の変更を使う') {
         await expect(theirs).toBeVisible();
         await expect(mine).toHaveCount(0);
       } else if (choice === '自分の変更で上書き') {
@@ -285,10 +292,10 @@ test.describe('競合', () => {
         await expect(theirs).toBeVisible();
         await expect(mine).not.toContainText('未送信', { timeout: 15_000 });
       }
-      // 行の印（未送信・競合）が残っていない（件名にも「競合」が入るので、印の要素だけを見る）
-      await expect(page.getByText(/^(競合|未送信)$/)).toHaveCount(0);
+      // 行の印（未送信・競合）が残っていない
+      await expect(list.getByText(/^(変更がぶつかっています|未送信)/)).toHaveCount(0);
       const expected =
-        choice === '家族の変更を採用'
+        choice === '家族の変更を使う'
           ? [`${title} 家族`]
           : choice === '自分の変更で上書き'
             ? [`${title} 自分`]
@@ -326,8 +333,8 @@ test.describe('SW を通らない遷移', () => {
 test('/api/* は Cache Storage に入らない', async ({ page }) => {
   await page.goto('/');
   await underServiceWorker(page);
-  await page.getByRole('link', { name: '月' }).click();
-  await page.getByRole('link', { name: 'これから' }).click();
+  await navTo(page, '月').click();
+  await navTo(page, 'これから').click();
   const cached = await page.evaluate(async () => {
     const urls: string[] = [];
     for (const name of await caches.keys()) {
@@ -407,12 +414,12 @@ test.describe('はじめての端末', () => {
     });
     await page.goto('/');
     await expect(page).toHaveURL(/\/welcome$/);
-    await expect(page.getByRole('heading', { name: /ようこそ/ })).toBeVisible();
+    await expect(page.getByText('いとへようこそ')).toBeVisible();
     // ほかの家族の色は選べない。空いている色を選ぶとサーバーに保存される
-    await expect(page.getByRole('radio', { name: /^wakatake/ })).toBeDisabled();
-    const fuji = page.getByRole('radio', { name: /^fuji/ });
+    await expect(page.getByRole('button', { name: /^若竹/ })).toBeDisabled();
+    const fuji = page.getByRole('button', { name: /^藤/ });
     await fuji.click();
-    await expect(fuji).toBeChecked();
+    await expect(fuji).toHaveAttribute('aria-pressed', 'true');
     await expect
       .poll(
         async () =>
@@ -422,15 +429,16 @@ test.describe('はじめての端末', () => {
       .toBe('fuji');
     await page.getByRole('button', { name: '次へ' }).click();
     await page.getByRole('button', { name: 'はじめる' }).click();
-    await expect(page.getByRole('heading', { name: 'これから' })).toBeVisible();
+    await expect(homeList(page)).toBeVisible();
     const notice = page.getByRole('note');
     await expect(notice).toContainText('ホーム画面に追加');
     await notice.getByRole('button', { name: '案内を閉じる' }).click();
     await page.reload();
-    await expect(page.getByRole('heading', { name: 'これから' })).toBeVisible();
+    await expect(homeList(page)).toBeVisible();
     await expect(page.getByRole('note')).toHaveCount(0);
     await page.goto('/install');
-    await expect(page.getByRole('heading', { name: 'ホーム画面に追加' })).toBeVisible();
+    await expect(page.getByRole('main')).toContainText('ホーム画面に追加');
+    await expect(page.getByRole('button', { name: 'iPhone' })).toBeVisible();
   });
 
   test.describe('ログアウト', () => {
@@ -448,7 +456,7 @@ test.describe('はじめての端末', () => {
       });
       await page.goto('/settings');
       await underServiceWorker(page);
-      await expect(page.getByRole('heading', { name: '設定' })).toBeVisible();
+      await expect(page.getByText('この端末と家族')).toBeVisible();
       await page.getByRole('button', { name: 'この端末からログアウト' }).click();
       await expect(page).toHaveURL(/\/welcome$/);
       const left = await page.evaluate(() => ({
@@ -460,7 +468,7 @@ test.describe('はじめての端末', () => {
       await underServiceWorker(page);
       await context.setOffline(true);
       await page.reload();
-      await expect(page.getByRole('heading', { name: /ようこそ/ })).toBeVisible();
+      await expect(page.getByText('いとへようこそ')).toBeVisible();
       await context.setOffline(false);
     });
   });

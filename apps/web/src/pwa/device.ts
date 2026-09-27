@@ -37,4 +37,5 @@ export const DEVICE_KEYS = {
   installNoticeDismissed: 'notice.install.dismissed',
   notificationsNoticeDismissed: 'notice.notifications.dismissed',
   textSize: 'textSize',
+  theme: 'theme',
 } as const;

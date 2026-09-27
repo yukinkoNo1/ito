@@ -6,6 +6,7 @@ import {
   diffDays,
   type EventCreateInput,
   type EventDTO,
+  expand,
   fromJst,
   type MemberDTO,
   type Occurrence,
@@ -24,6 +25,17 @@ import {
   updatedLabel,
 } from './labels';
 import { toOccurrenceVM, type VmContext } from './occurrence';
+
+/** 予定の回を探す（recurrenceId があればその回。繰り返しの展開は Phase 3） */
+export function findOccurrence(
+  event: LocalEvent,
+  overrides: LocalEvent[],
+  recurrenceId: string | null,
+): Occurrence<LocalEvent> | null {
+  const all = expand(event, overrides, fromJst('1970-01-01'), fromJst(addDays('2100-12-31', 1)));
+  if (recurrenceId) return all.find((o) => o.recurrenceId === recurrenceId) ?? null;
+  return all[0] ?? null;
+}
 
 function nameOf(members: MemberDTO[], id: string): string {
   return members.find((m) => m.id === id)?.name ?? '？';

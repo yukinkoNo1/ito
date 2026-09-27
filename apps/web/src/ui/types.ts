@@ -11,7 +11,7 @@ export type TimeHM = string;
 /** 0=日 1=月 2=火 3=水 4=木 5=金 6=土 */
 export type Weekday = 0 | 1 | 2 | 3 | 4 | 5 | 6;
 
-/** 家族の色（日本の伝統色）。tokens.css の --m-<color>-thread / -text / -wash に対応 */
+/** 家族の色（日本の伝統色）。tokens.css の --m-<color>-thread / -text に対応（淡い面は color-mix で作る。§22） */
 export type MemberColor =
   | 'yamabuki'
   | 'wakakusa'
@@ -76,6 +76,8 @@ export interface SyncVM {
   status: 'synced' | 'syncing' | 'offline' | 'error';
   lastSyncedLabel: string | null; // 例: '14:18'
   pendingCount: number; // 未送信の変更数
+  errorLabel: string | null; // status が error のときの理由（C-02 に出す。§12 の 401・403・426。§24 D29）
+  action: 'retry' | 'update'; // C-02 のボタン（426 は「更新」。§24 D29）
 }
 
 /* ───────── 月 ───────── */
@@ -179,7 +181,7 @@ export interface ComposerVM {
   ambiguities: AmbiguityVM[];
   overlaps: string[]; // 例: '10/10(土) は「家族旅行（金沢）」と重なっています'
   examples: string[]; // 入力例
-  quickDates: { label: string; date: DateISO }[]; // 日付の候補の札 '今日' '明日' '土' '日' '来週の土'
+  quickDates: { label: string; date: DateISO }[]; // 日付の候補の札 '今日' '明日' '10/3(土)' '10/4(日)' '10/10(土)'（日付で書く。§16）
   quickTimes: TimeHM[]; // 開始時刻の候補の札 ['09:00','12:00','15:00','18:00','19:00']（「終日」「時刻を選ぶ」はUI側で固定）
   suggestions: { title: string; hint: string | null; patch: Partial<EventDraftVM> }[]; // 最近の予定から（例: 歯医者 · は · 19:30）
   saveLabel: string; // 保存ボタンの文言 '10/3(土) 10:00 に保存'
@@ -318,6 +320,8 @@ export type TabId = 'flow' | 'month' | 'free' | 'settings';
 /** 全画面共通の枠。下部に「一言入力バー」と、アイコン＋文字のナビを持つ。未送信・オフラインは入力バーのすぐ上に1行 */
 export interface AppShellProps {
   current: TabId;
+  /** 画面ごとの CSS の修飾（'month-screen' など。§24 D29） */
+  screen?: string;
   sync: SyncVM;
   toast: ToastVM | null;
   composerHint: string; // 入力バーの例文 '土曜10時 父 ゴルフ'
@@ -327,6 +331,8 @@ export interface AppShellProps {
   onToastAction: () => void;
   onToastDismiss: () => void;
   children: ReactNode;
+  /** 画面の上に重ねるシート（S-04 詳細・S-05 書く画面）。開いているあいだ、下の画面と下の帯は操作できない（§24 D29） */
+  overlay?: ReactNode;
 }
 
 /** ホームの上部に一度だけ出す控えめな案内（はじめての設定の続き。閉じられる） */
@@ -396,6 +402,23 @@ export interface EventDetailScreenProps {
   onChangeReminders: (offsets: number[]) => void;
   onOpenMap: (query: string) => void;
   onResolveConflict: () => void; // occ.sync === 'conflict' のとき
+  /** 詳細の中に重ねる小さなシート（FieldEditSheet・C-04・C-05。§24 D29） */
+  children?: ReactNode;
+}
+
+/** S-04 の「その項目だけ直す」小さなシート（詳細の中に重ねる。§6.2「詳細の時刻をタップ → 選ぶ → 保存」。§24 D29） */
+export interface FieldEditSheetProps {
+  open: boolean;
+  field: 'date' | 'members'; // date = 日付と時刻
+  draft: EventDraftVM;
+  quickDates: { label: string; date: DateISO }[];
+  quickTimes: TimeHM[];
+  members: MemberVM[];
+  saveLabel: string; // '10/3(土) 10:00 に変更'
+  canSave: boolean;
+  onChangeDraft: (patch: Partial<EventDraftVM>) => void;
+  onSave: () => void;
+  onClose: () => void;
 }
 
 /** 繰り返し予定の編集・削除範囲 */

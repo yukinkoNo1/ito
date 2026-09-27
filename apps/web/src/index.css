@@ -1,1 +1,28 @@
+/* 読み込む順: tailwindcss → ui/tokens.css → ui/styles.css（書き出しと同じ。RUNBOOK 7. Phase 6） */
 @import "tailwindcss";
+/* フォントは自己ホスト（外部 CDN を使わない。§17） */
+@import "@fontsource/instrument-serif/400.css";
+@import "@fontsource/geist-mono/400.css";
+@import "@fontsource/geist-mono/500.css";
+@import "./ui/tokens.css";
+@import "./ui/styles.css";
+@import "./ui/member-colors.css";
+@import "./ui/additions.css";
+
+/* Tailwind の色を tokens.css に接続する（§22。テーマは html の data-theme で切り替わる） */
+@theme inline {
+  --color-paper: var(--paper);
+  --color-paper-2: var(--paper-2);
+  --color-ink: var(--ink);
+  --color-ink-2: var(--ink-2);
+  --color-ink-3: var(--ink-3);
+  --color-rule: var(--rule);
+  --color-rule-strong: var(--rule-strong);
+  --color-shu: var(--shu);
+  --color-accent: var(--accent);
+  --color-on-accent: var(--on-accent);
+  --color-sun: var(--sun);
+  --color-sat: var(--sat);
+  --font-serif: "Instrument Serif", "Hiragino Mincho ProN", serif;
+  --font-mono: "Geist Mono", monospace;
+}

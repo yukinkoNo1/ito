@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "ito-e2e",
+      "runtimeExecutable": "node",
+      "runtimeArgs": ["scripts/e2e-server.mjs"],
+      "port": 8788
+    }
+  ]
+}

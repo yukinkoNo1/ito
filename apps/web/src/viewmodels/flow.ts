@@ -100,7 +100,7 @@ function hasContent(day: DayVM): boolean {
 }
 
 /**
- * 「これから」の並び（§6.3 S-01）。月の区切り見出し、予定のある日（今日は予定がなくても出す）、
+ * 「これから」の並び（§6.3 S-01）。月の区切り見出し、予定のある日（今日と、移動した日は予定がなくても出す）、
  * 予定のない日をまとめた 1 行。
  */
 export function buildFlowItems(
@@ -109,6 +109,7 @@ export function buildFlowItems(
   to: DateISO,
   ctx: VmContext,
   filter: string[] | null,
+  alwaysShow: DateISO[] = [],
 ): FlowItem[] {
   const byDay = groupByDay(events, from, to, ctx, filter);
   const items: FlowItem[] = [];
@@ -134,7 +135,7 @@ export function buildFlowItems(
   for (let d = from; d < to; d = addDays(d, 1)) {
     const ym = d.slice(0, 7);
     const day = buildDay(d, byDay.get(d), ctx);
-    const show = hasContent(day) || d === ctx.today;
+    const show = hasContent(day) || d === ctx.today || alwaysShow.includes(d);
     if (!show) {
       gapStart ??= d;
       continue;

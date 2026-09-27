@@ -3,7 +3,7 @@
 > 対象読者: 実装担当（Claude Code）と開発者本人。**このファイルが仕様の唯一の正**。実装中に仕様と違う判断をしたら §24 決定ログに追記する。
 > 作成日: 2026-09-27 ／ アプリ名「いと」（糸）は仮称。家族一人ひとりを1本の糸として描くデザインから。
 > v1.1（2026-09-27）: リビングの家族ダッシュボード「いえボード」に予定を渡す**表示用フィード**を追加（§13.1。関連して §1・2・3・5・7・9・10・13・14・18・19・20・21・23・24・25・付録A を更新。メンバーの名前の重複禁止と、Tailscale の全許可の規則の送信元を人の端末に絞る変更を含む）。いと の画面は変えていない（§22 はそのまま）。
-> v1.2（自走中の変更）: §24（D15〜）、§10（feed_tokens の last_user_device_at）、付録A（STATIC_DIR・MAX_MEMBERS の上限）、§12 の同期の細則（D28）
+> v1.2（自走中の変更）: §24（D15〜）、§10（feed_tokens の last_user_device_at）、付録A（STATIC_DIR・MAX_MEMBERS の上限）、§12 の同期の細則（D28）、§16 の書く画面の決まり、§22 の型（D29）
 
 ## 目次
 1. 概要とゴール / 2. 前提・制約 / 3. 用語 / 4. ユーザーストーリー / 5. 機能一覧 / 6. 画面構成と遷移 / 7. システム構成 / 8. 技術スタック / 9. リポジトリ構成 / 10. データモデル / 11. 日時・終日・繰り返し / 12. 同期（ローカルファースト） / 13. API（13.1 表示用フィード） / 14. 認証・認可 / 15. 通知 / 16. 一言入力（AI解析） / 17. PWA / 18. セキュリティ / 19. 非機能要件 / 20. デプロイと運用 / 21. テスト戦略 / 22. UI契約とUI統合 / 23. 実装フェーズと受け入れ基準 / 24. 決定ログ / 25. 将来の拡張 / 付録A 環境変数 / 付録B 家族の端末セットアップ
@@ -686,6 +686,9 @@ type FeedOccurrence = {
 - 最近の予定: ローカル DB の過去 90 日の予定名を回数順に最大 5 件。よく使う人と開始時刻（最頻値）を添え、タップで予定名・人・時刻をまとめて入れる
 - 一言から解析した値は札の選択状態に反映し、札をタップすれば上書きできる
 - 保存ボタンの文言に中身を入れる（「10/3(土) 10:00 に保存」）。日付が決まるまでは押せない
+- **件名が空なら保存できない**（ボタンは「件名を入れてください」）
+- **最近の予定はシートを開いた時点で出す**（一言を書く前から選べる。編集では出さない）
+- **開いたときに選んでおく日**: 入力バーから開いたら表示中の日（最初は今日。これからの週の帯・日付で移動した日、月で選んだ日）、日の見出しの「＋」や月の「この日に書く」から開いたらその日（§6.2 の「入力バー → 候補 → 保存」の 3 タップのため）
 
 ## 17. PWA
 
@@ -921,7 +924,7 @@ volumes:
 - **色の正は `ui/tokens.css`**。値は下の色と同じはず（UI 担当 AI に渡した値）。違っていたら下の値に戻す。淡い面は `color-mix(in oklab, 糸の色 10%, var(--paper))`（ダークは 20%）。Tailwind の `@theme` は tokens.css へ接続する
 - 端末のダーク設定への追従は本体側で行う（`prefers-color-scheme` を見て `html` に `data-theme` を付ける。ユーザーが選んだテーマがあればそちらを優先）
 - 文字の大きさ（標準／大きめ）は `html` の `font-size` で切り替える（100% / 115%）。UI の寸法は rem で作られている前提で、px 固定の箇所は Phase 6 で rem に直す
-- 下の型が画面の props の正。変えるときはこの節を更新する
+- 下の型が画面の props の正。変えるときはこの節を更新する（`apps/web/src/ui/types.ts` と同じであることを web のテストで確かめる）。Phase 6 で足したもの: `AppShellProps.screen`・`AppShellProps.overlay`、`EventDetailScreenProps.children`、`FieldEditSheetProps`、`SyncVM.errorLabel`・`SyncVM.action`（§24 D29）
 
 **色（UI 担当 AI に渡した値）**
 ```css
@@ -958,15 +961,21 @@ export type TimeHM = string;
 /** 0=日 1=月 2=火 3=水 4=木 5=金 6=土 */
 export type Weekday = 0 | 1 | 2 | 3 | 4 | 5 | 6;
 
-/** 家族の色（日本の伝統色）。tokens.css の --m-<color>-thread / -text / -wash に対応 */
+/** 家族の色（日本の伝統色）。tokens.css の --m-<color>-thread / -text に対応（淡い面は color-mix で作る。§22） */
 export type MemberColor =
-  | 'yamabuki' | 'wakakusa' | 'wakatake' | 'asagi'
-  | 'fuji' | 'momo' | 'ruri' | 'kaki';
+  | 'yamabuki'
+  | 'wakakusa'
+  | 'wakatake'
+  | 'asagi'
+  | 'fuji'
+  | 'momo'
+  | 'ruri'
+  | 'kaki';
 
 export interface MemberVM {
   id: string;
-  name: string;   // 表示名 例: 'お父さん'
-  mark: string;   // 1文字の略称 例: '父'（糸のラベルなど狭い場所で使う）
+  name: string; // 表示名 例: 'お父さん'
+  mark: string; // 1文字の略称 例: '父'（糸のラベルなど狭い場所で使う）
   color: MemberColor;
   isMe: boolean;
 }
@@ -975,23 +984,23 @@ export interface MemberVM {
 
 /** 予定の「1回分」。繰り返し予定は回ごとに1つ */
 export interface OccurrenceVM {
-  key: string;                    // 一意（繰り返しは回ごとに異なる）
+  key: string; // 一意（繰り返しは回ごとに異なる）
   eventId: string;
-  title: string | null;           // null = 他の家族の非公開予定 →「予定あり」と表示
+  title: string | null; // null = 他の家族の非公開予定 →「予定あり」と表示
   allDay: boolean;
   startDate: DateISO;
-  endDate: DateISO;               // 終日: 最終日（その日を含む）/ 時刻あり: 終わる日（日付をまたぐと翌日）
-  startTime: TimeHM | null;       // 終日は null
-  endTime: TimeHM | null;         // 終了時刻なし・終日は null
-  memberIds: string[];            // 関係する家族（forEveryone のときは全員のID）
+  endDate: DateISO; // 終日: 最終日（その日を含む）/ 時刻あり: 終わる日（日付をまたぐと翌日）
+  startTime: TimeHM | null; // 終日は null
+  endTime: TimeHM | null; // 終了時刻なし・終日は null
+  memberIds: string[]; // 関係する家族（forEveryone のときは全員のID）
   forEveryone: boolean;
   location: string | null;
   note: string | null;
   recurrenceLabel: string | null; // 例: '毎週 月・木'（繰り返しなしは null）
-  isPrivate: boolean;             // 非公開（自分の非公開予定、または他の家族の非公開予定）
-  busy: boolean;                  // 空き時間の計算で「予定あり」とみなすか
+  isPrivate: boolean; // 非公開（自分の非公開予定、または他の家族の非公開予定）
+  busy: boolean; // 空き時間の計算で「予定あり」とみなすか
   sync: 'synced' | 'pending' | 'conflict'; // pending=未送信 / conflict=家族の変更と衝突
-  fresh: boolean;                 // 前回この端末で開いたあとに、家族が追加・変更した（「新」の印）
+  fresh: boolean; // 前回この端末で開いたあとに、家族が追加・変更した（「新」の印）
 }
 
 export type SpanPosition = 'single' | 'start' | 'middle' | 'end';
@@ -999,48 +1008,50 @@ export type SpanPosition = 'single' | 'start' | 'middle' | 'end';
 export interface DayVM {
   date: DateISO;
   weekday: Weekday;
-  holiday: string | null;          // 祝日名
+  holiday: string | null; // 祝日名
   isToday: boolean;
   isPast: boolean;
   allDay: { occ: OccurrenceVM; span: SpanPosition }[];
-  timed: { occ: OccurrenceVM; past: boolean }[];   // 開始時刻順
-  nowIndex: number | null;         // 今日のみ。timed[nowIndex] の直前に現在時刻線（timed.length なら末尾）
-  ongoingMemberIds: string[];      // 複数日の終日予定が続いている家族（この日の区間は糸を太くする）
+  timed: { occ: OccurrenceVM; past: boolean }[]; // 開始時刻順
+  nowIndex: number | null; // 今日のみ。timed[nowIndex] の直前に現在時刻線（timed.length なら末尾）
+  ongoingMemberIds: string[]; // 複数日の終日予定が続いている家族（この日の区間は糸を太くする）
 }
 
 export type FlowItem =
-  | { kind: 'month'; key: string; year: number; month: number; label: string }            // 月の区切り見出し
+  | { kind: 'month'; key: string; year: number; month: number; label: string } // 月の区切り見出し
   | { kind: 'day'; key: string; day: DayVM }
   | { kind: 'gap'; key: string; from: DateISO; to: DateISO; days: number; label: string }; // 予定のない日をまとめた1行
 
 export interface SyncVM {
   status: 'synced' | 'syncing' | 'offline' | 'error';
-  lastSyncedLabel: string | null;  // 例: '14:18'
-  pendingCount: number;            // 未送信の変更数
+  lastSyncedLabel: string | null; // 例: '14:18'
+  pendingCount: number; // 未送信の変更数
+  errorLabel: string | null; // status が error のときの理由（C-02 に出す。§12 の 401・403・426。§24 D29）
+  action: 'retry' | 'update'; // C-02 のボタン（426 は「更新」。§24 D29）
 }
 
 /* ───────── 月 ───────── */
 
 export interface MonthCellVM {
   date: DateISO;
-  day: number;                     // 1〜31
+  day: number; // 1〜31
   weekday: Weekday;
   inMonth: boolean;
   holiday: string | null;
   isToday: boolean;
-  memberIds: string[];             // その日に予定がある家族（重複なし・members の並び順）
-  hasEveryone: boolean;            // 家族全員の予定がある
-  count: number;                   // 予定の件数
+  memberIds: string[]; // その日に予定がある家族（重複なし・members の並び順）
+  hasEveryone: boolean; // 家族全員の予定がある
+  count: number; // 予定の件数
   items: { title: string | null; memberIds: string[]; forEveryone: boolean }[]; // セルに出す短い予定名（最大2件、終日→時刻順）
-  more: number;                    // items に入りきらなかった件数（「+2」）
+  more: number; // items に入りきらなかった件数（「+2」）
 }
 
 /** 複数日にわたる終日予定を、週の行ごとに分割した線 */
 export interface MonthSpanVM {
   key: string;
-  week: number;                    // 行 0〜5
-  fromCol: number;                 // 列 0〜6
-  toCol: number;                   // 列 0〜6（含む）
+  week: number; // 行 0〜5
+  fromCol: number; // 列 0〜6
+  toCol: number; // 列 0〜6（含む）
   memberIds: string[];
   forEveryone: boolean;
   title: string | null;
@@ -1048,12 +1059,12 @@ export interface MonthSpanVM {
 
 export interface MonthVM {
   year: number;
-  month: number;                   // 1〜12
-  label: string;                   // '2026年10月'
-  wafu: string;                    // 和風月名 '神無月'
-  weekStart: 0 | 1;                // 0=日曜始まり 1=月曜始まり
-  weekdayLabels: string[];         // ['日','月','火','水','木','金','土']（weekStart に合わせた順）
-  weeks: MonthCellVM[][];          // 5〜6行 × 7列
+  month: number; // 1〜12
+  label: string; // '2026年10月'
+  wafu: string; // 和風月名 '神無月'
+  weekStart: 0 | 1; // 0=日曜始まり 1=月曜始まり
+  weekdayLabels: string[]; // ['日','月','火','水','木','金','土']（weekStart に合わせた順）
+  weeks: MonthCellVM[][]; // 5〜6行 × 7列
   spans: MonthSpanVM[];
 }
 
@@ -1061,29 +1072,29 @@ export interface MonthVM {
 
 export interface EventDetailVM {
   occ: OccurrenceVM;
-  dateLabel: string;               // '10月3日 土曜日'（複数日は '10月10日(土) – 12日(月)'）
-  timeLabel: string | null;        // '07:00 — 15:00' / '07:30' / null（終日）
+  dateLabel: string; // '10月3日 土曜日'（複数日は '10月10日(土) – 12日(月)'）
+  timeLabel: string | null; // '07:00 — 15:00' / '07:30' / null（終日）
   createdByName: string;
-  updatedLabel: string;            // '更新 お母さん · 9/25 21:04'
-  myReminders: number[];           // 自分への通知。開始基準の分（負=前）。終日は開始日0:00基準（-240=前日20:00）
-  reminderOptions: number[];       // 選べる通知の候補
-  canEdit: boolean;                // 他の家族の非公開予定は false
+  updatedLabel: string; // '更新 お母さん · 9/25 21:04'
+  myReminders: number[]; // 自分への通知。開始基準の分（負=前）。終日は開始日0:00基準（-240=前日20:00）
+  reminderOptions: number[]; // 選べる通知の候補
+  canEdit: boolean; // 他の家族の非公開予定は false
 }
 
 export type RecurrenceVM =
   | { kind: 'none' }
   | { kind: 'daily'; interval: number }
-  | { kind: 'weekly'; interval: number; weekdays: Weekday[] }       // interval 2 = 隔週
-  | { kind: 'monthlyByDate'; day: number }                          // day -1 = 月末
-  | { kind: 'monthlyByWeekday'; nth: number[]; weekday: Weekday }   // nth 1〜5, -1=最終（第2・第4水曜 → [2,4], 3）
+  | { kind: 'weekly'; interval: number; weekdays: Weekday[] } // interval 2 = 隔週
+  | { kind: 'monthlyByDate'; day: number } // day -1 = 月末
+  | { kind: 'monthlyByWeekday'; nth: number[]; weekday: Weekday } // nth 1〜5, -1=最終（第2・第4水曜 → [2,4], 3）
   | { kind: 'yearly' }
-  | { kind: 'custom'; label: string };                              // UIでは編集不可、表示のみ
+  | { kind: 'custom'; label: string }; // UIでは編集不可、表示のみ
 
 /** 繰り返しの終わり */
 export type RecurrenceEndVM =
   | { kind: 'never' }
-  | { kind: 'count'; count: number }       // ◯回で終わる（1〜1000）
-  | { kind: 'until'; date: DateISO };      // ◯月◯日まで（その日を含む）
+  | { kind: 'count'; count: number } // ◯回で終わる（1〜1000）
+  | { kind: 'until'; date: DateISO }; // ◯月◯日まで（その日を含む）
 
 export interface EventDraftVM {
   title: string;
@@ -1097,7 +1108,7 @@ export interface EventDraftVM {
   location: string;
   note: string;
   recurrence: RecurrenceVM;
-  recurrenceEnd: RecurrenceEndVM;  // recurrence が none のときは無視
+  recurrenceEnd: RecurrenceEndVM; // recurrence が none のときは無視
   myReminders: number[];
   isPrivate: boolean;
   busy: boolean;
@@ -1105,25 +1116,25 @@ export interface EventDraftVM {
 
 export interface AmbiguityVM {
   field: 'date' | 'time' | 'members' | 'title' | 'recurrence';
-  question: string;                                  // 例: '「来週の土曜」はどちら？'
+  question: string; // 例: '「来週の土曜」はどちら？'
   options: { label: string; patch: Partial<EventDraftVM> }[];
-  chosen: number | null;                             // 選ばれた options の添字
+  chosen: number | null; // 選ばれた options の添字
 }
 
 export interface ComposerVM {
-  mode: 'quick' | 'detail';        // quick=一言入力 / detail=詳しく入力
-  editing: boolean;                // 既存予定の編集なら true
+  mode: 'quick' | 'detail'; // quick=一言入力 / detail=詳しく入力
+  editing: boolean; // 既存予定の編集なら true
   text: string;
   parse: 'idle' | 'parsing' | 'done' | 'failed';
-  source: 'ai' | 'rules' | null;   // ai=AIで解析 / rules=かんたん解析（オフライン等）
+  source: 'ai' | 'rules' | null; // ai=AIで解析 / rules=かんたん解析（オフライン等）
   draft: EventDraftVM | null;
   ambiguities: AmbiguityVM[];
-  overlaps: string[];              // 例: '10/10(土) は「家族旅行（金沢）」と重なっています'
-  examples: string[];              // 入力例
-  quickDates: { label: string; date: DateISO }[];   // 日付の候補の札 '今日' '明日' '土' '日' '来週の土'
-  quickTimes: TimeHM[];            // 開始時刻の候補の札 ['09:00','12:00','15:00','18:00','19:00']（「終日」「時刻を選ぶ」はUI側で固定）
+  overlaps: string[]; // 例: '10/10(土) は「家族旅行（金沢）」と重なっています'
+  examples: string[]; // 入力例
+  quickDates: { label: string; date: DateISO }[]; // 日付の候補の札 '今日' '明日' '10/3(土)' '10/4(日)' '10/10(土)'（日付で書く。§16）
+  quickTimes: TimeHM[]; // 開始時刻の候補の札 ['09:00','12:00','15:00','18:00','19:00']（「終日」「時刻を選ぶ」はUI側で固定）
   suggestions: { title: string; hint: string | null; patch: Partial<EventDraftVM> }[]; // 最近の予定から（例: 歯医者 · は · 19:30）
-  saveLabel: string;               // 保存ボタンの文言 '10/3(土) 10:00 に保存'
+  saveLabel: string; // 保存ボタンの文言 '10/3(土) 10:00 に保存'
   saving: boolean;
   error: string | null;
 }
@@ -1132,9 +1143,9 @@ export interface ComposerVM {
 
 export interface BusyBlockVM {
   memberId: string;
-  startMin: number;                // その日の0:00からの分
+  startMin: number; // その日の0:00からの分
   endMin: number;
-  label: string | null;            // null = 非公開
+  label: string | null; // null = 非公開
 }
 
 export interface FreeDayVM {
@@ -1142,29 +1153,29 @@ export interface FreeDayVM {
   weekday: Weekday;
   holiday: string | null;
   busy: BusyBlockVM[];
-  commonFree: { startMin: number; endMin: number }[];  // 選択中の家族全員が空いている区間
+  commonFree: { startMin: number; endMin: number }[]; // 選択中の家族全員が空いている区間
 }
 
 /** 空き時間を探す時間帯。カレンダーにない仕事などは分からないため、夜・休日に絞れるようにする */
-export type FreePreset = 'evenings' | 'holidays' | 'all';   // 夜(17-24時) / 休日(土日祝 8-24時) / 終日(6-24時)
+export type FreePreset = 'evenings' | 'holidays' | 'all'; // 夜(17-24時) / 休日(土日祝 8-24時) / 終日(6-24時)
 
 /** 全員があいている候補（空き時間の画面で最初に見せる一覧） */
 export interface FreeCandidateVM {
   date: DateISO;
-  label: string;                   // '10/3(土) 16:00–24:00'
+  label: string; // '10/3(土) 16:00–24:00'
   startMin: number;
   endMin: number;
 }
 
 export interface FreeTimeVM {
-  rangeLabel: string;              // '9/27(日) – 10/3(土)'
+  rangeLabel: string; // '9/27(日) – 10/3(土)'
   preset: FreePreset;
-  dayStartMin: number;             // 表示範囲の始まり（360 = 6:00）
-  dayEndMin: number;               // 表示範囲の終わり（1440 = 24:00）
+  dayStartMin: number; // 表示範囲の始まり（360 = 6:00）
+  dayEndMin: number; // 表示範囲の終わり（1440 = 24:00）
   minDuration: 60 | 120 | 240;
-  memberIds: string[];             // 対象の家族
-  candidates: FreeCandidateVM[];   // 最大5件（日付順）
-  days: FreeDayVM[];               // 「くわしく見る」で開く時間軸
+  memberIds: string[]; // 対象の家族
+  candidates: FreeCandidateVM[]; // 最大5件（日付順）
+  days: FreeDayVM[]; // 「くわしく見る」で開く時間軸
 }
 
 /* ───────── 履歴・ゴミ箱・検索 ───────── */
@@ -1175,67 +1186,72 @@ export interface ActivityVM {
   action: 'create' | 'update' | 'delete' | 'restore';
   eventId: string;
   title: string;
-  detail: string | null;           // '開始 8:00 → 7:00'
-  dayLabel: string;                // グループ見出し '今日' '昨日' '9/25(金)'
-  atLabel: string;                 // '3分前' '21:40'
+  detail: string | null; // '開始 8:00 → 7:00'
+  dayLabel: string; // グループ見出し '今日' '昨日' '9/25(金)'
+  atLabel: string; // '3分前' '21:40'
   unread: boolean;
 }
 
 export interface TrashItemVM {
   eventId: string;
   title: string;
-  whenLabel: string;               // '9/25(金) 18:00'
+  whenLabel: string; // '9/25(金) 18:00'
   deletedByName: string;
-  deletedLabel: string;            // '9/26 に削除'
-  daysLeft: number;                // 完全に消えるまでの日数
+  deletedLabel: string; // '9/26 に削除'
+  daysLeft: number; // 完全に消えるまでの日数
 }
 
 export interface SearchGroupVM {
-  dateLabel: string;               // '10月3日(土)'
+  dateLabel: string; // '10月3日(土)'
   items: OccurrenceVM[];
 }
 
 /* ───────── 設定 ───────── */
 
-export type NotificationPermissionVM = 'default' | 'granted' | 'denied' | 'unsupported' | 'needs-install';
+export type NotificationPermissionVM =
+  | 'default'
+  | 'granted'
+  | 'denied'
+  | 'unsupported'
+  | 'needs-install';
 
 export interface NotificationSettingsVM {
-  permission: NotificationPermissionVM;               // needs-install = iPhoneでホーム画面に未追加
-  timedDefaults: number[];                           // 時刻ありの予定の既定通知 例: [-30]
-  allDayDefaults: number[];                          // 終日の予定の既定通知 例: [-240]（前日20:00）
+  permission: NotificationPermissionVM; // needs-install = iPhoneでホーム画面に未追加
+  timedDefaults: number[]; // 時刻ありの予定の既定通知 例: [-30]
+  allDayDefaults: number[]; // 終日の予定の既定通知 例: [-240]（前日20:00）
   morningDigest: { enabled: boolean; time: TimeHM }; // 朝のまとめ
-  eveningPreview: { enabled: boolean; time: TimeHM };// 前夜の予告
-  familyChanges: 'mine' | 'all' | 'off';             // 家族の変更通知（自分に関係する予定のみ / すべて / オフ）
+  eveningPreview: { enabled: boolean; time: TimeHM }; // 前夜の予告
+  familyChanges: 'mine' | 'all' | 'off'; // 家族の変更通知（自分に関係する予定のみ / すべて / オフ）
   quietHours: { enabled: boolean; from: TimeHM; to: TimeHM };
-  showDetailsOnLockScreen: boolean;                  // ロック画面に予定名を出すか
+  showDetailsOnLockScreen: boolean; // ロック画面に予定名を出すか
 }
 
 export interface AdminMemberVM extends MemberVM {
-  login: string;                   // Tailscaleのログイン（例: 'mama@example.com'）
+  login: string; // Tailscaleのログイン（例: 'mama@example.com'）
   role: 'admin' | 'member';
   disabled: boolean;
-  deviceCount: number;             // 通知を受け取っている端末の数
+  deviceCount: number; // 通知を受け取っている端末の数
 }
 
 /** 通知を受け取る自分の端末（Push購読）。紛失時にここから止める */
 export interface DeviceVM {
   id: string;
-  label: string;                   // 'iPhone' 'Android'
-  lastUsedLabel: string;           // '今日' '9/20'
+  label: string; // 'iPhone' 'Android'
+  lastUsedLabel: string; // '今日' '9/20'
   isThisDevice: boolean;
 }
 
 export interface SettingsVM {
   me: MemberVM;
-  aliases: string[];               // 一言入力で自分を指す呼び名
-  takenColors: { color: MemberColor; mark: string }[];  // 他の家族が使用中の色
-  textSize: 'standard' | 'large';  // 文字の大きさ（大きめ = 全体を約1.15倍）
+  aliases: string[]; // 一言入力で自分を指す呼び名
+  takenColors: { color: MemberColor; mark: string }[]; // 他の家族が使用中の色
+  textSize: 'standard' | 'large'; // 文字の大きさ（大きめ = 全体を約1.15倍）
   theme: 'system' | 'light' | 'dark';
   weekStart: 0 | 1;
   notifications: NotificationSettingsVM;
   devices: DeviceVM[];
   isAdmin: boolean;
-  members: AdminMemberVM[];        // 管理者のときだけ中身がある
+  members: AdminMemberVM[]; // 管理者のときだけ中身がある
   install: { platform: 'ios' | 'android' | 'other'; installed: boolean };
   appVersion: string;
 }
@@ -1243,8 +1259,8 @@ export interface SettingsVM {
 export interface ToastVM {
   id: string;
   kind: 'info' | 'error' | 'undo';
-  message: string;                 // '予定を削除しました'
-  actionLabel: string | null;      // '元に戻す'
+  message: string; // '予定を削除しました'
+  actionLabel: string | null; // '元に戻す'
 }
 
 /* ───────── 画面の props ───────── */
@@ -1254,46 +1270,54 @@ export type TabId = 'flow' | 'month' | 'free' | 'settings';
 /** 全画面共通の枠。下部に「一言入力バー」と、アイコン＋文字のナビを持つ。未送信・オフラインは入力バーのすぐ上に1行 */
 export interface AppShellProps {
   current: TabId;
+  /** 画面ごとの CSS の修飾（'month-screen' など。§24 D29） */
+  screen?: string;
   sync: SyncVM;
   toast: ToastVM | null;
-  composerHint: string;            // 入力バーの例文 '土曜10時 父 ゴルフ'
+  composerHint: string; // 入力バーの例文 '土曜10時 父 ゴルフ'
   onNavigate: (tab: TabId) => void;
   onOpenComposer: () => void;
-  onRetrySync: () => void;         // つながらないときの帯の「再試行」
+  onRetrySync: () => void; // つながらないときの帯の「再試行」
   onToastAction: () => void;
   onToastDismiss: () => void;
   children: ReactNode;
+  /** 画面の上に重ねるシート（S-04 詳細・S-05 書く画面）。開いているあいだ、下の画面と下の帯は操作できない（§24 D29） */
+  overlay?: ReactNode;
 }
 
 /** ホームの上部に一度だけ出す控えめな案内（はじめての設定の続き。閉じられる） */
-export type HomeNoticeVM = { kind: 'install' | 'notifications'; message: string; actionLabel: string } | null;
+export type HomeNoticeVM = {
+  kind: 'install' | 'notifications';
+  message: string;
+  actionLabel: string;
+} | null;
 
 /** S-01 これから */
 export interface FlowScreenProps {
   items: FlowItem[];
   members: MemberVM[];
-  anchorKey: string;               // 初回表示で先頭に合わせる item の key（今日）
-  headerDateLabel: string;         // '9月27日 日曜日'
-  summary: string[];               // 今日のまとめ（最大4つ）'今日 3件' '18:00 全員で夕食' '父は出張中（〜30日）'
-  freshCount: number;              // 家族が追加・変更した「新」の件数（0 なら出さない）
-  week: MonthCellVM[];             // 上部に固定する週の帯（7日）
-  selectedDate: DateISO;           // 週の帯で強調する日（いま見ている日）
-  sync: SyncVM;                    // 見出しの下に小さく表示する同期状態
-  filterMemberIds: string[] | null;// null = 全員 / [自分のID] = 自分だけ / [誰かのID] = その人だけ
+  anchorKey: string; // 初回表示で先頭に合わせる item の key（今日）
+  headerDateLabel: string; // '9月27日 日曜日'
+  summary: string[]; // 今日のまとめ（最大4つ）'今日 3件' '18:00 全員で夕食' '父は出張中（〜30日）'
+  freshCount: number; // 家族が追加・変更した「新」の件数（0 なら出さない）
+  week: MonthCellVM[]; // 上部に固定する週の帯（7日）
+  selectedDate: DateISO; // 週の帯で強調する日（いま見ている日）
+  sync: SyncVM; // 見出しの下に小さく表示する同期状態
+  filterMemberIds: string[] | null; // null = 全員 / [自分のID] = 自分だけ / [誰かのID] = その人だけ
   unreadActivity: number;
-  showBackToToday: boolean;        // 今日から離れたら「今日に戻る」を出す
+  showBackToToday: boolean; // 今日から離れたら「今日に戻る」を出す
   notice: HomeNoticeVM;
-  emptyExamples: string[];         // 予定ゼロのときに見せる入力例
+  emptyExamples: string[]; // 予定ゼロのときに見せる入力例
   onPickExample: (text: string) => void; // 入力例をタップ → 一言入力へ
   onSetFilter: (memberIds: string[] | null) => void;
-  onJumpToFresh: () => void;       // 「新しい予定 2件」→ 最初の1件へ
+  onJumpToFresh: () => void; // 「新しい予定 2件」→ 最初の1件へ
   onJumpToDate: (date: DateISO) => void; // 週の帯・日付ジャンプから
   onPrevWeek: () => void;
   onNextWeek: () => void;
   onOpenOccurrence: (key: string) => void;
   onComposeOnDate: (date: DateISO) => void;
-  onReachStart: () => void;        // 過去方向の追加読み込み
-  onReachEnd: () => void;          // 未来方向の追加読み込み
+  onReachStart: () => void; // 過去方向の追加読み込み
+  onReachEnd: () => void; // 未来方向の追加読み込み
   onJumpToday: () => void;
   onNoticeAction: () => void;
   onNoticeDismiss: () => void;
@@ -1306,7 +1330,7 @@ export interface MonthScreenProps {
   month: MonthVM;
   members: MemberVM[];
   selectedDate: DateISO;
-  selectedDay: DayVM;              // 下半分に出す、選んだ日の予定（「これから」と同じ行）
+  selectedDay: DayVM; // 下半分に出す、選んだ日の予定（「これから」と同じ行）
   onSelectDate: (date: DateISO) => void;
   onPrevMonth: () => void;
   onNextMonth: () => void;
@@ -1324,17 +1348,34 @@ export interface EventDetailScreenProps {
   onEdit: () => void;
   onEditField: (field: 'title' | 'date' | 'time' | 'members' | 'location' | 'note') => void; // その項目だけ直す
   onDuplicate: () => void;
-  onDelete: () => void;            // 確認せずに削除し、アプリ側が「元に戻す」を出す（繰り返しは範囲を選ぶ）
+  onDelete: () => void; // 確認せずに削除し、アプリ側が「元に戻す」を出す（繰り返しは範囲を選ぶ）
   onChangeReminders: (offsets: number[]) => void;
   onOpenMap: (query: string) => void;
-  onResolveConflict: () => void;   // occ.sync === 'conflict' のとき
+  onResolveConflict: () => void; // occ.sync === 'conflict' のとき
+  /** 詳細の中に重ねる小さなシート（FieldEditSheet・C-04・C-05。§24 D29） */
+  children?: ReactNode;
+}
+
+/** S-04 の「その項目だけ直す」小さなシート（詳細の中に重ねる。§6.2「詳細の時刻をタップ → 選ぶ → 保存」。§24 D29） */
+export interface FieldEditSheetProps {
+  open: boolean;
+  field: 'date' | 'members'; // date = 日付と時刻
+  draft: EventDraftVM;
+  quickDates: { label: string; date: DateISO }[];
+  quickTimes: TimeHM[];
+  members: MemberVM[];
+  saveLabel: string; // '10/3(土) 10:00 に変更'
+  canSave: boolean;
+  onChangeDraft: (patch: Partial<EventDraftVM>) => void;
+  onSave: () => void;
+  onClose: () => void;
 }
 
 /** 繰り返し予定の編集・削除範囲 */
 export interface RecurrenceScopeDialogProps {
   open: boolean;
   action: 'edit' | 'delete';
-  offline: boolean;                // true なら「これ以降」「すべて」を無効にして理由を表示
+  offline: boolean; // true なら「これ以降」「すべて」を無効にして理由を表示
   onChoose: (scope: 'this' | 'following' | 'all') => void;
   onCancel: () => void;
 }
@@ -1347,11 +1388,11 @@ export interface ComposerSheetProps {
   online: boolean;
   onClose: () => void;
   onTextChange: (text: string) => void;
-  onSubmitText: () => void;        // 一言をAIで解析して確認へ
+  onSubmitText: () => void; // 一言をAIで解析して確認へ
   onChangeDraft: (patch: Partial<EventDraftVM>) => void; // 日付・時刻・人の札もこれで反映
-  onPickSuggestion: (index: number) => void;             // 「最近の予定」の候補
+  onPickSuggestion: (index: number) => void; // 「最近の予定」の候補
   onChooseAmbiguity: (ambiguityIndex: number, optionIndex: number) => void;
-  onSetMode: (mode: 'quick' | 'detail') => void;         // detail =「くわしく」を開いた状態
+  onSetMode: (mode: 'quick' | 'detail') => void; // detail =「くわしく」を開いた状態
   onSave: () => void;
 }
 
@@ -1360,7 +1401,7 @@ export interface ConflictSheetProps {
   open: boolean;
   mine: OccurrenceVM;
   theirs: OccurrenceVM;
-  theirsByName: string;            // 'お母さん'
+  theirsByName: string; // 'お母さん'
   members: MemberVM[];
   onKeepTheirs: () => void;
   onKeepMine: () => void;
@@ -1383,29 +1424,43 @@ export interface FreeTimeScreenProps {
 /** S-07 設定 */
 export interface SettingsScreenProps {
   vm: SettingsVM;
-  onChangeProfile: (patch: { name?: string; mark?: string; color?: MemberColor; aliases?: string[] }) => void;
+  onChangeProfile: (patch: {
+    name?: string;
+    mark?: string;
+    color?: MemberColor;
+    aliases?: string[];
+  }) => void;
   onChangeNotifications: (patch: Partial<NotificationSettingsVM>) => void;
   onEnableNotifications: () => void;
   onTestNotification: () => void;
   onChangeTheme: (theme: SettingsVM['theme']) => void;
   onChangeTextSize: (size: SettingsVM['textSize']) => void;
   onChangeWeekStart: (weekStart: 0 | 1) => void;
-  onOpenMembers: () => void;       // 管理者のみ
+  onOpenMembers: () => void; // 管理者のみ
   onOpenActivity: () => void;
   onOpenTrash: () => void;
   onExport: (format: 'json' | 'ics') => void;
   onOpenInstallGuide: () => void;
   onRemoveDevice: (deviceId: string) => void; // その端末への通知を止める
-  onLogoutDevice: () => void;      // この端末のデータを消す
+  onLogoutDevice: () => void; // この端末のデータを消す
 }
 
 /** S-07b 家族の管理（管理者） */
 export interface MembersAdminScreenProps {
   members: AdminMemberVM[];
   onBack: () => void;
-  onAdd: (input: { login: string; name: string; mark: string; color: MemberColor; role: 'admin' | 'member' }) => void;
-  onUpdate: (memberId: string, patch: Partial<Pick<AdminMemberVM, 'name' | 'mark' | 'color' | 'role' | 'disabled'>>) => void;
-  onRevokeDevices: (memberId: string) => void;  // その人の全端末への通知を止める（端末紛失時）
+  onAdd: (input: {
+    login: string;
+    name: string;
+    mark: string;
+    color: MemberColor;
+    role: 'admin' | 'member';
+  }) => void;
+  onUpdate: (
+    memberId: string,
+    patch: Partial<Pick<AdminMemberVM, 'name' | 'mark' | 'color' | 'role' | 'disabled'>>,
+  ) => void;
+  onRevokeDevices: (memberId: string) => void; // その人の全端末への通知を止める（端末紛失時）
 }
 
 /** S-08 履歴 */
@@ -1430,7 +1485,7 @@ export interface SearchScreenProps {
   groups: SearchGroupVM[];
   members: MemberVM[];
   filterMemberIds: string[] | null;
-  recentQueries: string[];         // 最近の検索語
+  recentQueries: string[]; // 最近の検索語
   onQueryChange: (query: string) => void;
   onSetFilter: (memberIds: string[] | null) => void;
   onBack: () => void;
@@ -1442,16 +1497,16 @@ export type OnboardingStep = 'color' | 'howto';
 export interface OnboardingScreenProps {
   step: OnboardingStep;
   me: MemberVM;
-  takenColors: { color: MemberColor; mark: string }[];  // 他の家族が使用中の色
+  takenColors: { color: MemberColor; mark: string }[]; // 他の家族が使用中の色
   onPickColor: (color: MemberColor) => void;
-  onNext: () => void;              // howto では「はじめる」
+  onNext: () => void; // howto では「はじめる」
 }
 
 /** S-12 ホーム画面への追加ガイド */
 export interface InstallGuideScreenProps {
   platform: 'ios' | 'android' | 'other';
   installed: boolean;
-  canPrompt: boolean;              // Android でインストールダイアログを出せる
+  canPrompt: boolean; // Android でインストールダイアログを出せる
   onPromptInstall: () => void;
   onBack: () => void;
 }
@@ -1543,6 +1598,9 @@ export interface OfflineBannerProps {
 | D26 | 前回開いた時刻（新着の印）・はじめての進み具合・ホームの案内を閉じたかは localStorage に置く（端末ごと）。はじめての端末は新着の印を付けない。作成・更新の時刻（createdAt・updatedAt・履歴の時刻）はミリ秒まで返す | §12 F-21・§15 の「端末ごとに保存」。背面に回るとき（pagehide）に確実に書けるように同期の API で。同じ秒の中の変更を取りこぼさないように | IndexedDB に置く／秒まで |
 | D27 | 履歴の非公開の扱い: 非公開の予定を公開する更新は、家族に見える行には「家族に公開した」だけを書き、非公開だったときの差分は持ち主だけの行に残す。家族の予定を非公開にしたら、それまでの履歴の行も持ち主だけのものにする | 一度も家族に見せていない中身（公開前の件名・場所）を家族の履歴に出さない。非公開にした予定の件名を、前の履歴から推し量らせない（安全側） | 書いた時点の visibility のまま |
 | D28 | 同期の細則: 競合中の予定は C-05 で解決するまで編集・削除を受け付けない（詳細には解決のボタンだけを出す）。「再試行」でも 429 の Retry-After の待ちは解かない。送信待ちの送る順番は、端末の時計が戻っても積んだ順にする（createdAt を前の送信待ちより後ろに）。待ちが上限（1 時間）を超えていたら時計が戻ったとみなしてすぐ送る。サーバーに受け取られずに送信待ちを消したとき（422・403 で戻した、打ち消した編集、送る前に取り消した削除）は、次の取得を全件にする。426 では新しい SW を確かめ、「再試行」の代わりに「更新」を出す。この端末からログアウトでは SW の登録も外す。ホーム画面から開いたときは起動のたびに永続化を求める | 競合中に編集すると、解決のときに自分の変更が黙って消える。429 は §12 のとおり Retry-After に従う。時計が戻ると削除のあとの作成が先に送られる。送信待ちがあるあいだの取得で捨てたサーバーの版を取り直す。キャッシュを消したまま古い SW が残るとオフラインで開けない。iOS は appinstalled が出ない | 競合中も編集でき、送れたら競合の記録を消す（Phase 1 の WD-05）／再試行ですべての待ちを解く |
+| D29 | §22 の型に足す: `AppShellProps.screen`（画面ごとの CSS の修飾）・`AppShellProps.overlay`（S-04 詳細・S-05 書く画面を重ねる。開いているあいだは下の画面と下の帯を inert にし、トーストはシートの上に出す）、`EventDetailScreenProps.children`（詳細の中に重ねる小さなシート・C-04・C-05）、`FieldEditSheetProps`（S-04 の「その項目だけ直す」）、`SyncVM.errorLabel`・`SyncVM.action`（C-02 に止まった理由を出し、426 は「再試行」の代わりに「更新」）。「今日に戻る」は画面から AppShell の下の帯へ portal で描く。糸の位置は 4 人までは書き出しのクラス、5〜8 人は均等割りの style。詳細は `/e/:id` のまま、開く前の画面の上にシートとして重ねる（直接開いたら「これから」の上）。書く画面の開け閉めは履歴に積まない。開始の時刻を動かしたら終わりの時刻も同じだけ動かす（長さを保つ）。地図のリンクは iPhone では Apple のマップ、ほかは Google マップ | 書き出しの画面の中にあった状態（下の帯・小さなシート・競合の文）を props に出すため。シートの下に隠れたナビを操作できないように（axe の target-size）。§6.2「予定の時刻を直す」で時刻だけを直したときに長さが変わらないように | 各画面が下の帯を自前で持つ（書き出しのまま）／詳細を別のページにする |
+| D30 | コントラストと 44px のための見た目の小さな変更（過去の行・月の外の日の opacity を文字の色に、糸の色の文字を text の色に、週の帯の高さを 2.75rem に、月の画面の週の始まりの切り替えを外す＝設定にある）。Biome の `noDescendingSpecificity` は書き出しの CSS（`ui/*.css`）だけ外す（並べ替えると見た目が変わる）。`role="group"` の div は fieldset にしない（既定の枠と flex の差で見た目が変わる） | §23 Phase 6 の axe の違反ゼロと、§6.1 のタップ領域 44px。「見た目は変えない」（§22）の範囲で直す | 色の値そのものを変える（§22 の色の正を変えることになる） |
+| D31 | ギャラリーは開発と E2E 用のビルドにだけ入れる（本番のビルドでは分岐ごと消える）。`/__gallery?s=<状態>&theme=dark&bare=1`（bare は枠なし）。見本（`ui/mock-data.ts`）は import のない素のデータにし、ギャラリーは本番と同じ viewmodels で §22 の型にする。E2E は同じ予定を API で入れ、時計を 2030-09-29 14:18 に止めて、ギャラリーの状態と本番の画面の `.app-shell` のスクリーンショットを比べる（ほかの E2E が作る予定と重ならないように先の年） | RUNBOOK 3. と §23 Phase 6 の「ギャラリーの状態と本番画面のスクリーンショットが一致する」を、同じデータ・固定の時計で確かめるため | 本番のビルドにも入れる／ギャラリーの見本を手で §22 の型に書く（本番の組み立てと食い違っても気づけない） |
 
 ## 25. 将来の拡張（今回は作らない）
 iPhone のカレンダーから購読できる ICS フィード（Tailscale 接続時のみ有効。`feed_tokens` に本人用のスコープを足せば、連携キーの仕組みをそのまま使える）、いえボードに祝日・留守（複数日の busy の終日予定）を出す（フィードにはもう入っている。いえボード側の作業）、Google カレンダーからの取り込み、写真の添付、六曜、移動時間、インターネット公開時のパスキー認証。
