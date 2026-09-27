@@ -32,3 +32,26 @@
 - 終わらないコマンドと、対話が要るコマンドを使わない（watch モード、HTML レポートを開く、pnpm approve-builds など）。ターンの終わりに、自分で起動したプロセスを残さない
 
 <!-- ここから下は Phase 0 で Claude Code が追記する（主要コマンド・ディレクトリの役割・規約・テスト方針）。上の節は消さない -->
+
+## 主要コマンド（pnpm は corepack の shim を `.tools/bin` に置いて使う: `export PATH="$PWD/.tools/bin:$PATH"`）
+- `pnpm install` / `pnpm dev`（web :5173 と server :8787。開発用の鍵は `node scripts/dev-setup.mjs` で作る）
+- `pnpm check`（Biome＋型検査＋Vitest）/ `pnpm build` / `pnpm test:e2e`（E2E 用ビルド＋:8788 で Playwright）
+- `pnpm db:generate`（drizzle-kit。列やテーブルを足すだけ）/ `pnpm db:migrate` / `pnpm seed` / `pnpm feed-token <create|list|revoke>`
+- Docker: `cd deploy && docker compose build && docker compose up -d --wait && docker compose exec app node dist/cli.js --help && docker compose down`
+
+## ディレクトリ
+- `packages/core`（@ito/core。jst・schemas・recurrence・occurrences・holidays・freebusy・nlp。PWA とサーバーで共有）
+- `apps/server`（Hono。env・middleware・routes・services・db・jobs・cli。drizzle/ はマイグレーション）
+- `apps/web`（React＋Vite＋Dexie。app・features・viewmodels・ui・data・pwa・sw.ts）
+- `deploy/`（compose・serve.json・*.example）、`e2e/`（Playwright）、`scripts/`（dev・e2e の補助）、`docs/plans/`（ステップごとの計画）
+
+## 規約
+- TS strict。外から来るもの（HTTP の本文・クエリ・環境変数・AI の出力・IndexedDB）は zod で検証する
+- 日付は `@ito/core/jst` の関数だけで扱う（JST 固定）。Temporal は使わない。今の時刻は Clock から（Date.now() は clock.ts だけ）
+- サーバーから出る予定は必ず projectEvent を通す。ログに予定名・入力文・ログイン・連携キーを出さない
+- 依存を足すときは docs/plans に理由を 1 行。バージョンは lockfile で固定
+
+## テスト方針
+- core は単体、server は `app.request()`＋メモリ上の SQLite、web の viewmodels は単体（fake-indexeddb）
+- E2E は本番ビルド（E2E 用）を Hono が配信するモード。CSP 違反とコンソールエラー 0 件を全テストで確かめる
+- 偽の時計（fakeClock）で時刻を固定する。実 API（Anthropic・Web Push）は呼ばない
