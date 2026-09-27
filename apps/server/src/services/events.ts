@@ -15,7 +15,7 @@ import type { DbLike } from '../db/client';
 import { events, type MemberRow, members } from '../db/schema';
 import { ApiError } from '../errors';
 import { validationError } from '../lib/validate';
-import { describeDiff, memberNames, recordActivity } from './activity';
+import { describeDiff, hideActivityOf, memberNames, recordActivity } from './activity';
 import { insertRecord, loadEvent, loadExceptions, recordChange, updateRecord } from './records';
 
 export const TRASH_DAYS = 30;
@@ -168,7 +168,16 @@ export function updateEvent(
   updateRecord(db, next, membersChanged);
   propagateToExceptions(db, next, now);
   const diff = describeDiff(current, next, memberNames(db));
-  recordActivity(db, clock, me.id, 'update', next, diff);
+  if (current.visibility === 'private' && next.visibility === 'family') {
+    // 非公開だったときの件名・場所などを家族に見せない（T5）: 全部の差分は持ち主だけの行に、家族には「公開した」だけ
+    recordActivity(db, clock, me.id, 'update', { ...next, visibility: 'private' }, diff);
+    recordActivity(db, clock, me.id, 'update', next, ['家族に公開した']);
+  } else {
+    // 家族の予定を非公開にしたら、それまでの履歴もほかの家族から見えなくする（安全側。§24 D27）
+    if (current.visibility === 'family' && next.visibility === 'private')
+      hideActivityOf(db, id, next.ownerId);
+    recordActivity(db, clock, me.id, 'update', next, diff);
+  }
   recordChange(db, 'event', id, now);
   return { status: 200, body: { event: projectEvent(next, me.id) } };
 }
@@ -261,7 +270,7 @@ export function restoreEvent(db: DbLike, clock: Clock, me: MemberRow, id: string
   return { status: 200, body: { event: projectEvent(next, me.id) } };
 }
 
-/** ゴミ箱（見てよいもの。他人の非公開は出さない。§24 D21） */
+/** ゴミ箱（見てよいもの。他人の非公開は出さない。§24 D22） */
 export function listTrash(
   db: DbLike,
   clock: Clock,

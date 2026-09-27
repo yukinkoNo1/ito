@@ -164,7 +164,7 @@ export const feedTokens = sqliteTable('feed_tokens', {
   tokenHash: text('token_hash').notNull().unique(),
   createdAt: integer('created_at').notNull(),
   lastUsedAt: integer('last_used_at'),
-  /** 人の端末（ID ヘッダ付き）から最後に使われた時刻（§24 D19。5 分に 1 回まで書く） */
+  /** 人の端末（ID ヘッダ付き）から最後に使われた時刻（§24 D21。5 分に 1 回まで書く） */
   lastUserDeviceAt: integer('last_user_device_at'),
   revokedAt: integer('revoked_at'),
 });

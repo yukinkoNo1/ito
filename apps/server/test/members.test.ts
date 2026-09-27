@@ -186,6 +186,31 @@ describe('/api/me', () => {
     });
   });
 
+  it('通知の設定を 1 項目だけ送っても、ほかの項目は保たれる（既定値に戻らない）', async () => {
+    const first = await send(ctx, 'PATCH', '/api/me', {
+      headers: as('haru'),
+      body: {
+        settings: {
+          notifications: {
+            timedDefaults: [-60],
+            quietHours: { enabled: false, from: '23:00', to: '06:00' },
+          },
+        },
+      },
+    });
+    expect(first.status).toBe(200);
+    const res = await send(ctx, 'PATCH', '/api/me', {
+      headers: as('haru'),
+      body: { settings: { notifications: { familyChanges: 'all' } } },
+    });
+    const me = (await res.json()) as { settings: { notifications: Record<string, unknown> } };
+    expect(me.settings.notifications).toMatchObject({
+      familyChanges: 'all',
+      timedDefaults: [-60],
+      quietHours: { enabled: false, from: '23:00', to: '06:00' },
+    });
+  });
+
   it('略称は 1 文字、呼び名は 10 個まで・各 10 文字まで、知らないキーは 422', async () => {
     expect(
       (await send(ctx, 'PATCH', '/api/me', { headers: as('haru'), body: { mark: 'はる' } })).status,

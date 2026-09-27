@@ -40,10 +40,18 @@ if (created.status !== 0 || !key || !id) {
   process.stdout.write(`連携キーを作れませんでした（CLI の終了コード ${created.status}）\n`);
   process.exit(1);
 }
-const withoutKey = await get('/api/feed/display');
-const withKey = await get('/api/feed/display?days=3', { Authorization: `Bearer ${key}` });
-const revoked = runCli(['feed-token', 'revoke', id]);
-const afterRevoke = await get('/api/feed/display?days=3', { Authorization: `Bearer ${key}` });
+let withoutKey = null;
+let withKey = null;
+let revoked = null;
+let afterRevoke = null;
+try {
+  withoutKey = await get('/api/feed/display');
+  withKey = await get('/api/feed/display?days=3', { Authorization: `Bearer ${key}` });
+} finally {
+  // 要求が失敗しても、確認用のキーはいつも止める（使われないキーを残さない）
+  revoked = runCli(['feed-token', 'revoke', id]);
+}
+afterRevoke = await get('/api/feed/display?days=3', { Authorization: `Bearer ${key}` });
 process.stdout.write(
   `キーなし: ${withoutKey}\nキーあり: ${withKey}\n止めた（CLI の終了コード ${revoked.status}）あと: ${afterRevoke}\n`,
 );

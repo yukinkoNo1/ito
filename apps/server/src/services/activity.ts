@@ -104,6 +104,14 @@ export function recordActivity(
     .run();
 }
 
+/** その予定の履歴をすべて持ち主だけのものにする（家族の予定を非公開にしたとき） */
+export function hideActivityOf(db: DbLike, eventId: string, ownerId: string): void {
+  db.update(activity)
+    .set({ visibility: 'private', ownerId })
+    .where(eq(activity.eventId, eventId))
+    .run();
+}
+
 /** 見てよい履歴: 家族の予定、または自分の非公開（非公開の履歴は持ち主にだけ見せる。§10） */
 function visibleTo(meId: string) {
   return or(eq(activity.visibility, 'family'), eq(activity.ownerId, meId));

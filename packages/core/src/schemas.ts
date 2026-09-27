@@ -212,11 +212,24 @@ export function readMemberSettings(json: string): MemberSettings {
   return memberSettingsSchema.parse({});
 }
 
+/** 通知の設定の部分更新（既定値を持たない。送った項目だけを当てる） */
+export const notificationSettingsPatchSchema = z
+  .object({
+    timedDefaults: z.array(reminderOffsetSchema).max(3).optional(),
+    allDayDefaults: z.array(reminderOffsetSchema).max(3).optional(),
+    morningDigest: z.object({ enabled: z.boolean(), time: timeHmSchema }).strict().optional(),
+    eveningPreview: z.object({ enabled: z.boolean(), time: timeHmSchema }).strict().optional(),
+    familyChanges: z.enum(['mine', 'all', 'off']).optional(),
+    quietHours: quietHoursSchema.optional(),
+    showDetailsOnLockScreen: z.boolean().optional(),
+  })
+  .strict();
+
 export const settingsPatchSchema = z
   .object({
     theme: z.enum(['system', 'light', 'dark']).optional(),
     weekStart: z.union([z.literal(0), z.literal(1)]).optional(),
-    notifications: notificationSettingsSchema.partial().optional(),
+    notifications: notificationSettingsPatchSchema.optional(),
   })
   .strict();
 

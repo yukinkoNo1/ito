@@ -360,10 +360,16 @@ export class DataStore {
 
   /* ───────── 変更（まず手元に反映し、outbox に積む） ───────── */
 
-  private async pendingFor(eventId: string): Promise<OutboxItem[]> {
-    return (await this.db.outbox.where('eventId').equals(eventId).sortBy('createdAt')).filter(
-      (o) => o.id !== this.inflightId,
-    );
+  private async itemsFor(eventId: string): Promise<OutboxItem[]> {
+    return this.db.outbox.where('eventId').equals(eventId).sortBy('createdAt');
+  }
+
+  /**
+   * 一度も送っていない項目か。送ったことのある項目（通信エラーのあとも残る）はサーバーが処理済みかもしれず、
+   * 同じ Idempotency-Key の再送には保存済みの応答が返るので、畳んだり捨てたりしない。
+   */
+  private isUnsent(o: OutboxItem): boolean {
+    return o.attempts === 0 && o.id !== this.inflightId;
   }
 
   private newItem(
@@ -433,8 +439,9 @@ export class DataStore {
         return;
       }
       const next: LocalEvent = { ...applied.value, version: current.version, sync: 'pending' };
-      const pending = await this.pendingFor(eventId);
-      const last = pending[pending.length - 1];
+      const items = await this.itemsFor(eventId);
+      const tail = items[items.length - 1];
+      const last = tail && this.isUnsent(tail) ? tail : undefined;
       if (last?.kind === 'create') {
         // 作成＋更新 → 作成 1 件
         await db.outbox.update(last.id, { body: dtoToCreateBody(next) });
@@ -475,7 +482,7 @@ export class DataStore {
     await db.transaction('rw', [db.events, db.outbox], async () => {
       const current = await db.events.get(eventId);
       if (!current || !canSeeContent(current, meId)) return;
-      const pending = await this.pendingFor(eventId);
+      const pending = (await this.itemsFor(eventId)).filter((o) => this.isUnsent(o));
       const unsentCreate = pending.find((o) => o.kind === 'create');
       await db.outbox.bulkDelete(pending.map((o) => o.id));
       await db.events.delete(eventId);
@@ -506,7 +513,8 @@ export class DataStore {
   private async undoDelete(item: OutboxItem, before: LocalEvent): Promise<void> {
     const db = this.db;
     await db.transaction('rw', [db.events, db.outbox], async () => {
-      const stillPending = (await db.outbox.get(item.id)) && item.id !== this.inflightId;
+      const stored = await db.outbox.get(item.id);
+      const stillPending = stored !== undefined && this.isUnsent(stored);
       if (stillPending) {
         await db.outbox.delete(item.id);
         const serverState = item.snapshot;

@@ -60,7 +60,7 @@ export function isColorTaken(db: DbLike, color: string, exceptId?: string): bool
 }
 
 /**
- * 名前がほかの有効なメンバーとぶつかったら、20 文字に収まるように末尾に 2, 3… を付ける（RUNBOOK 3.・SPEC §24 D17）
+ * 名前がほかの有効なメンバーとぶつかったら、20 文字に収まるように末尾に 2, 3… を付ける（RUNBOOK 3.・SPEC §24 D18）
  */
 export function uniqueName(base: string, taken: ReadonlySet<string>): string {
   // 切り詰めたあとにも前後の空白を除く（比べるときの正規化と合わせる）

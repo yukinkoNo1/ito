@@ -443,6 +443,43 @@ describe('他人の非公開（§10・§14。T5）', () => {
     expect(own.items).toHaveLength(2);
   });
 
+  it('非公開の予定を件名を変えながら公開しても、ほかの家族の履歴に非公開だったときの件名・場所・メモは出ない', async () => {
+    const event = await secret();
+    const res = await patchEvent(ctx, 'yuki', event.id, 1, {
+      visibility: 'family',
+      title: '家族で買い物',
+      location: null,
+      note: null,
+    });
+    expect(res.status).toBe(200);
+    const mamaActivity = await send(ctx, 'GET', '/api/activity', { headers: as('mama') });
+    const text = await mamaActivity.text();
+    expect(text).not.toMatch(/プレゼント|お母さんに|駅前/);
+    const items = JSON.parse(text).items as { title: string; detail: string | null }[];
+    expect(items.map((i) => [i.title, i.detail])).toEqual([['家族で買い物', '家族に公開した']]);
+    // 持ち主には全部の差分が残る
+    const own = await body<{ items: { detail: string | null }[] }>(
+      await send(ctx, 'GET', '/api/activity', { headers: as('yuki') }),
+    );
+    expect(
+      own.items.some((i) => i.detail?.includes('件名「プレゼント選び」→「家族で買い物」')),
+    ).toBe(true);
+  });
+
+  it('家族の予定を非公開にしたら、それまでの履歴もほかの家族から見えなくなる', async () => {
+    const { event } = await createEvent(
+      ctx,
+      'yuki',
+      timed('2026-09-29', '17:00', null, { title: '誕生日の準備', memberIds: [IDS.yuki] }),
+    );
+    await patchEvent(ctx, 'yuki', event.id, 1, { title: '誕生日の準備2' });
+    await patchEvent(ctx, 'yuki', event.id, 2, { visibility: 'private' });
+    const mamaActivity = await send(ctx, 'GET', '/api/activity', { headers: as('mama') });
+    const text = await mamaActivity.text();
+    expect(text).not.toContain('誕生日の準備');
+    expect((await syncAs(ctx, 'mama')).unreadActivity).toBe(0);
+  });
+
   it('差分同期でも投影される', async () => {
     await createEvent(ctx, 'mama', timed('2026-09-28', '08:00', null));
     const start = (await syncAs(ctx, 'mama')).cursor;

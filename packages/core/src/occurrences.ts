@@ -16,7 +16,7 @@ export interface OccurrenceSource {
 
 /** 表示単位の「1 回分」（§3） */
 export interface Occurrence<E extends OccurrenceSource = OccurrenceSource> {
-  /** 繰り返しなしは eventId、繰り返しは `親の ID@recurrenceId`（例外行でも同じ。§24 D23） */
+  /** 繰り返しなしは eventId、繰り返しは `親の ID@recurrenceId`（例外行でも同じ。RUNBOOK 3.。Phase 3 で §3・§24 に書く） */
   key: string;
   /** 親（マスター）の ID。繰り返しなしは自分の ID */
   seriesId: string;
