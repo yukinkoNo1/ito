@@ -1,5 +1,5 @@
 # 進み具合
-今: Phase 4（通知） / 次にやること: レビュー → 指摘を直す → phase-4 → Phase 5（一言入力）
+今: Phase 4（通知） / 次にやること: docs/plans/phase-4.md §6 のレビューの指摘を直す → 確認 → phase-4 → 退避した Phase 5 の作業（git stash「phase5-wip」: ルール解析 38 件のテスト・/api/parse・ai_usage（0004）・書く画面の一言の解析・ai:eval・Phase 5 の E2E。テストは通っている）を戻す → レビュー → phase-5 → Phase 7 → 総点検 → 最終確認
 
 ## ステップ
 | ステップ | 状態（未着手・作業中・完了） | タグ | メモ |

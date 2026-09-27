@@ -48,3 +48,20 @@
 ## 5. 決めたこと（§24 に書く）
 - D35: 通知の細則（この端末の印は購読 ID、送信の記録と再送の規則、まとめ・予告の時刻と予定がない日、家族の変更のまとめ待ち（同じ予定は 1 件に）、通知の文・url・tag・badge、テスト通知、鍵がないときは無効（公開鍵 null・テスト通知 unavailable）、自分への通知の候補と端末での保存、SW の SYNC・NAVIGATE、E2E の push は new headless の Chromium）
 
+## 6. レビューの指摘（未対応。次にここから直す）
+- P4-api-security-01・P4-web-01・P4-spec-tests-01（high）: ログアウト・「この端末」の削除のあとも checkPushSubscription が購読し直す → 端末に「自分で止めた」印を持ち、印があれば再購読・upsert しない（enablePush だけが消す）。単体テストを足す
+- P4-api-security-02・P4-scheduler-01・P4-spec-tests-02（medium）: 2 分以内に非公開にした・担当を外したとき、mine の人のまとめ待ちに件名が残る → 受け手を絞る前に同じ予定の未送信の行を見て、見えない人は「予定あり」に直すか消す。テストを足す
+- P4-web-02（medium）: SW がない環境（pnpm dev）で navigator.serviceWorker.ready が解決せず、ログアウトが止まる → getRegistration() を使う
+- P4-web-03（medium）: 通知に renotify: true を付ける
+- P4-web-04（medium）: 書く画面で通知を触ったあと終日⇔時刻ありを切り替えると、前の種類のオフセットが残る → 切り替えで既定値に戻す
+- P4-scheduler-04（low）: まとめ待ちを 1 件にするのは同じ人のときだけ
+- P4-scheduler-05（low）: flush は送る前に読んだ createdAt 以前の行だけ
+- P4-scheduler-06（low）: offsetLabel(1440, true) を「翌日 0:00」に
+- P4-web-05（low）: 書く画面の通知の候補も core の reminderOptions(allDay, current) から
+- P4-web-06（low）: 公開鍵が取れていないときは取り直し、鍵なし（unavailable）と通信の失敗を分ける
+- P4-web-08（low）: 書く画面の自分への通知の E2E（触らなければ行なし・触れば行あり・「これ以降」は新しいシリーズ）
+- P4-spec-tests-03（low）: classifyStatus の表・fail(400) で log・retry 6 回で止まってログ・端末のない人は書かない・鍵なしのスケジューラのテスト
+- P4-spec-tests-05（low）: 送信待ちの自分への通知があるまま pull しても上書きしない場面のテスト
+- P4-spec-tests-06（low）: README の手順 4 の括弧書きを「35 分後に始まる担当の予定で、既定の 30 分前の通知が 5 分後に届く」に
+- 却下: P4-spec-tests-04・api-security-03〜06・scheduler-02・03・07・08・09・10・web-07（理由はレビューの記録どおり: 仕様の範囲外・Phase 7 の掃除・性能・堅牢化の提案）
+
