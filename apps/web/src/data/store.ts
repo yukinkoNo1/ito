@@ -3,6 +3,7 @@ import {
   type Clock,
   canSeeContent,
   createLocally,
+  dtoToRecord,
   type EventChangesInput,
   type EventCreateInput,
   type EventDTO,
@@ -10,8 +11,11 @@ import {
   eventCreateSchema,
   eventDtoSchema,
   type FieldError,
+  isSeriesOccurrence,
   type MeDTO,
   meDtoSchema,
+  occurrenceFields,
+  recordToDto,
   syncResponseSchema,
   uuidv7,
 } from '@ito/core';
@@ -228,7 +232,13 @@ export class DataStore {
       'rw',
       [db.events, db.members, db.meta, db.outbox, db.conflicts],
       async () => {
-        const pending = new Set((await db.outbox.toArray()).map((o) => o.eventId));
+        // 送信待ちの予定と、送信待ちの「この回だけ」の例外行は、取得で上書き・削除しない
+        const pending = new Set(
+          (await db.outbox.toArray()).flatMap((o) => {
+            const ex = exceptionIdOf(o.body);
+            return ex ? [o.eventId, ex] : [o.eventId];
+          }),
+        );
         const conflicts = new Map((await db.conflicts.toArray()).map((c) => [c.eventId, c]));
         const keep = (id: string) => pending.has(id) || conflicts.has(id);
         if (data.full) {
@@ -345,6 +355,8 @@ export class DataStore {
             });
           }
         }
+        // 繰り返しの回の変更: 例外行・新しいシリーズも手元に入れる（§11）
+        for (const extra of extraEvents(body)) await db.events.put({ ...extra, sync: 'synced' });
         if (serverEvent) {
           if (rest.length === 0) {
             await db.events.put({ ...serverEvent, sync: 'synced' });
@@ -697,6 +709,219 @@ export class DataStore {
     void this.syncNow();
   }
 
+  /* ───────── 繰り返しの回（§11） ───────── */
+
+  /**
+   * 繰り返しの回の変更。this＝この回だけ（手元に例外行を作って送信待ちに積む。オフラインでもよい）、
+   * following・all＝これ以降・すべて（C-04 でオンラインのときだけ選べる。手元には送信中の印だけ付け、送れたら取り直す）
+   */
+  async updateOccurrence(
+    eventId: string,
+    recurrenceId: string,
+    scope: 'this' | 'following' | 'all',
+    changesInput: EventChangesInput,
+  ): Promise<Result<LocalEvent> & { undo?: () => Promise<void> }> {
+    const parsed = eventChangesSchema.safeParse(changesInput);
+    if (!parsed.success) {
+      return {
+        ok: false,
+        errors: parsed.error.issues.map((i) => ({ field: i.path.join('.'), message: i.message })),
+      };
+    }
+    const meId = await this.meId();
+    const db = this.db;
+    let result = {
+      ok: false,
+      errors: [{ field: 'id', message: '予定が見つかりません' }],
+    } as Result<LocalEvent>;
+    let undoChanges = null as EventChangesInput | null;
+    await db.transaction('rw', [db.events, db.outbox, db.conflicts], async () => {
+      const master = await db.events.get(eventId);
+      if (!master) return;
+      if (!canSeeContent(master, meId)) {
+        result = {
+          ok: false,
+          errors: [{ field: 'id', message: 'ほかの家族の内緒の予定は変えられません' }],
+        };
+        return;
+      }
+      if (await db.conflicts.get(eventId)) {
+        result = { ok: false, errors: [{ field: 'id', message: CONFLICT_FIRST }] };
+        return;
+      }
+      if (scope !== 'this') {
+        await db.outbox.add(
+          await this.newItem({
+            eventId,
+            kind: 'update',
+            method: 'PATCH',
+            path: `/api/events/${eventId}`,
+            body: { scope, recurrenceId, changes: parsed.data },
+            baseVersion: master.version,
+            snapshot: master,
+          }),
+        );
+        await db.events.put({ ...master, sync: 'pending' });
+        result = { ok: true, value: master };
+        return;
+      }
+      const existing = (await db.events.where('parentId').equals(eventId).toArray()).find(
+        (e) => e.recurrenceId === recurrenceId,
+      );
+      const base = existing ?? occurrenceBase(master, recurrenceId, uuidv7(this.clock.now()));
+      if (!base) {
+        result = {
+          ok: false,
+          errors: [{ field: 'recurrenceId', message: 'この回は見つかりません' }],
+        };
+        return;
+      }
+      const applied = applyChangesLocally(base, parsed.data, meId, this.clock.now());
+      if ('errors' in applied) {
+        result = { ok: false, errors: applied.errors };
+        return;
+      }
+      const next: LocalEvent = {
+        ...applied.value,
+        id: base.id,
+        version: base.version,
+        rrule: null,
+        exdates: [],
+        parentId: eventId,
+        recurrenceId,
+        ownerId: master.ownerId,
+        visibility: master.visibility,
+        sync: 'pending',
+      };
+      const own = diffChanges(base, next);
+      if (isEmptyChanges(own)) {
+        result = { ok: true, value: base };
+        return;
+      }
+      undoChanges = diffChanges(next, base);
+      await db.outbox.add(
+        await this.newItem({
+          eventId,
+          kind: 'update',
+          method: 'PATCH',
+          path: `/api/events/${eventId}`,
+          body: { scope: 'this', recurrenceId, exceptionId: base.id, changes: own },
+          baseVersion: master.version,
+          snapshot: master,
+        }),
+      );
+      await db.events.put(next);
+      result = { ok: true, value: next };
+    });
+    void this.syncNow();
+    const back = undoChanges;
+    if (!result.ok || !back) return result;
+    return {
+      ...result,
+      undo: async () => {
+        await this.updateOccurrence(eventId, recurrenceId, 'this', back);
+      },
+    };
+  }
+
+  /**
+   * 繰り返しの回の削除。this＝この回だけ（親の exdates。オフラインでもよい。元に戻せる）、
+   * following＝これ以降（元に戻せない。C-04 で確かめる）、all＝シリーズごとゴミ箱（元に戻せる）
+   */
+  async deleteOccurrence(
+    eventId: string,
+    recurrenceId: string,
+    scope: 'this' | 'following' | 'all',
+  ): Promise<{ ok: boolean; undo: (() => Promise<void>) | null }> {
+    if (scope === 'all') return this.deleteEvent(eventId);
+    const meId = await this.meId();
+    const db = this.db;
+    let ok = false;
+    let undo: (() => Promise<void>) | null = null;
+    await db.transaction('rw', [db.events, db.outbox, db.conflicts], async () => {
+      const master = await db.events.get(eventId);
+      if (!master || !canSeeContent(master, meId)) return;
+      if (await db.conflicts.get(eventId)) return;
+      const path = `/api/events/${eventId}?scope=${scope}&recurrenceId=${encodeURIComponent(recurrenceId)}`;
+      const item = await this.newItem({
+        eventId,
+        kind: 'delete',
+        method: 'DELETE',
+        path,
+        body: {},
+        baseVersion: master.version,
+        snapshot: master,
+      });
+      await db.outbox.add(item);
+      ok = true;
+      if (scope === 'following') {
+        await db.events.put({ ...master, sync: 'pending' });
+        return;
+      }
+      const exception = (await db.events.where('parentId').equals(eventId).toArray()).find(
+        (e) => e.recurrenceId === recurrenceId,
+      );
+      if (exception) await db.events.delete(exception.id);
+      await db.events.put({
+        ...master,
+        exdates: [...new Set([...master.exdates, recurrenceId])].sort(),
+        sync: 'pending',
+      });
+      undo = () => this.undoDeleteOccurrence(item, master, exception ?? null, recurrenceId);
+    });
+    void this.syncNow();
+    return { ok, undo };
+  }
+
+  private async undoDeleteOccurrence(
+    item: OutboxItem,
+    master: LocalEvent,
+    exception: LocalEvent | null,
+    recurrenceId: string,
+  ): Promise<void> {
+    const db = this.db;
+    await db.transaction('rw', [db.events, db.outbox, db.meta], async () => {
+      const stored = await db.outbox.get(item.id);
+      if (stored && this.isUnsent(stored)) {
+        // まだ送っていなければ、送信待ちを消して手元を戻す
+        await db.outbox.delete(item.id);
+        await db.setMeta('cursor', 0);
+        const now = await db.events.get(master.id);
+        if (now) {
+          await db.events.put({
+            ...now,
+            exdates: now.exdates.filter((d) => d !== recurrenceId),
+            sync: (await this.itemsFor(master.id)).length > 0 ? 'pending' : 'synced',
+          });
+        }
+        if (exception) await db.events.put(exception);
+        return;
+      }
+      // 送ったあとなら、その回の復元を送る
+      await db.outbox.add(
+        await this.newItem({
+          eventId: master.id,
+          kind: 'restore',
+          method: 'POST',
+          path: `/api/events/${master.id}/restore?recurrenceId=${encodeURIComponent(recurrenceId)}`,
+          body: {},
+          baseVersion: null,
+          snapshot: null,
+        }),
+      );
+      const now = await db.events.get(master.id);
+      if (now) {
+        await db.events.put({
+          ...now,
+          exdates: now.exdates.filter((d) => d !== recurrenceId),
+          sync: 'pending',
+        });
+      }
+      if (exception) await db.events.put({ ...exception, sync: 'pending' });
+    });
+    void this.syncNow();
+  }
+
   /** ゴミ箱から復元（オンラインで） */
   async restoreEvent(eventId: string): Promise<boolean> {
     try {
@@ -789,6 +1014,42 @@ export class DataStore {
       }),
     );
   }
+}
+
+/** 「この回だけ」の送信待ちの例外行の ID */
+function exceptionIdOf(body: unknown): string | null {
+  if (typeof body !== 'object' || body === null || !('exceptionId' in body)) return null;
+  const v = (body as { exceptionId: unknown }).exceptionId;
+  return typeof v === 'string' ? v : null;
+}
+
+/** 応答の例外行・新しいシリーズ（§11） */
+function extraEvents(body: unknown): EventDTO[] {
+  if (typeof body !== 'object' || body === null) return [];
+  const out: EventDTO[] = [];
+  for (const key of ['exception', 'created'] as const) {
+    if (!(key in body)) continue;
+    const parsed = eventDtoSchema.safeParse((body as Record<string, unknown>)[key]);
+    if (parsed.success) out.push(parsed.data);
+  }
+  return out;
+}
+
+/** その回の元の日時に置いた親の中身（例外行を手元で作るときの元。サーバーと同じ core の計算） */
+function occurrenceBase(master: LocalEvent, recurrenceId: string, id: string): LocalEvent | null {
+  const record = dtoToRecord(master);
+  if (!isSeriesOccurrence(record, recurrenceId)) return null;
+  const times = occurrenceFields(record, recurrenceId);
+  if (!times) return null;
+  const dto = recordToDto({
+    ...record,
+    ...times,
+    rrule: null,
+    exdates: [],
+    parentId: master.id,
+    recurrenceId,
+  });
+  return { ...dto, id, version: 0, sync: 'pending' };
 }
 
 function extractEvent(body: unknown): EventDTO | null {

@@ -426,6 +426,7 @@ export interface RecurrenceScopeDialogProps {
   open: boolean;
   action: 'edit' | 'delete';
   offline: boolean; // true なら「これ以降」「すべて」を無効にして理由を表示
+  lost: { following: number; all: number }; // その範囲を選ぶと消える、個別の変更・取り消しの件数（§11。§24 D33）
   onChoose: (scope: 'this' | 'following' | 'all') => void;
   onCancel: () => void;
 }
@@ -444,6 +445,8 @@ export interface ComposerSheetProps {
   onChooseAmbiguity: (ambiguityIndex: number, optionIndex: number) => void;
   onSetMode: (mode: 'quick' | 'detail') => void; // detail =「くわしく」を開いた状態
   onSave: () => void;
+  /** 書く画面の中に重ねるダイアログ（繰り返しの範囲 C-04。§24 D33） */
+  children?: ReactNode;
 }
 
 /** 競合の解決 */

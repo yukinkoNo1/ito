@@ -105,6 +105,21 @@ export const eventMembers = sqliteTable(
   (t) => [primaryKey({ columns: [t.eventId, t.memberId] })],
 );
 
+/** 予定ごとの本人の通知（§10）。行がなければ本人の既定値（担当者のとき）。[] は「通知なし」 */
+export const reminderPrefs = sqliteTable(
+  'reminder_prefs',
+  {
+    eventId: text('event_id')
+      .notNull()
+      .references(() => events.id, { onDelete: 'cascade' }),
+    memberId: text('member_id')
+      .notNull()
+      .references(() => members.id),
+    offsets: text('offsets').notNull().default('[]'),
+  },
+  (t) => [primaryKey({ columns: [t.eventId, t.memberId] })],
+);
+
 /** 履歴（1 年保持） */
 export const activity = sqliteTable(
   'activity',

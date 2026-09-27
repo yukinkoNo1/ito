@@ -5,5 +5,7 @@ export * from './ids';
 export * from './jst';
 export * from './members';
 export * from './occurrences';
+export * from './recurrence';
 export * from './schemas';
+export * from './series';
 export * from './text';

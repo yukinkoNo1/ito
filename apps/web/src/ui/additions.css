@@ -183,6 +183,13 @@ html[data-theme="dark"] {
   color: var(--ink);
 }
 
+/* C-04: その範囲を選ぶと消える件数（§11） */
+.recurrence-delete-sheet > .ui-button small {
+  display: block;
+  color: var(--ink-3);
+  font-size: 0.8125rem;
+}
+
 /* S-04: 作成・更新 */
 .detail-meta {
   margin: 1rem 1rem 0;

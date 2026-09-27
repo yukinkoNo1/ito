@@ -12,6 +12,7 @@ import { changes, type MemberRow } from '../db/schema';
 import { countUnread } from './activity';
 import { listAllMembers } from './members';
 import { loadActiveEvents, loadEventsByIds } from './records';
+import { listMyReminderPrefs } from './reminders';
 
 export function toMemberDto(m: MemberRow): MemberDTO {
   return {
@@ -58,7 +59,7 @@ function minSeq(db: DbLike): number | null {
 
 /**
  * 差分同期（§12）。cursor=0・古すぎる（changes が消えている）・未来のカーソルは全件（full: true）。
- * 予定は必ず projectEvent を通す。自分の reminder_prefs は Phase 4 で全件返す。
+ * 予定は必ず projectEvent を通す。自分の reminder_prefs は毎回全件返す（少ないので）。
  */
 export function buildSync(db: DbLike, me: MemberRow, cursor: number): SyncResponse {
   return db.transaction((tx) => {
@@ -93,7 +94,7 @@ export function buildSync(db: DbLike, me: MemberRow, cursor: number): SyncRespon
       events: eventsOut,
       deletedEventIds,
       members: listAllMembers(tx).map(toMemberDto),
-      myReminderPrefs: [],
+      myReminderPrefs: listMyReminderPrefs(tx, me.id),
       me: toMeDto(me),
       unreadActivity: countUnread(tx, me),
     };

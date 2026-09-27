@@ -15,6 +15,13 @@
       "when": 1790527657277,
       "tag": "0001_events_feed",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "6",
+      "when": 1790535863340,
+      "tag": "0002_reminder_prefs",
+      "breakpoints": true
     }
   ]
 }

@@ -1,6 +1,7 @@
 import {
   type ActivityDTO,
   type Clock,
+  describe,
   type EventRecord,
   formatMdW,
   formatTimeShort,
@@ -66,7 +67,12 @@ export function describeDiff(
     out.push(after.visibility === 'private' ? '内緒にした' : '家族に公開した');
   if (before.busy !== after.busy)
     out.push(after.busy ? '空き時間で「予定あり」にした' : '空き時間で「予定なし」にした');
-  if (before.rrule !== after.rrule) out.push('繰り返しを変更');
+  if (before.rrule !== after.rrule) {
+    // 繰り返しは説明文で（§11 describe）
+    const label = (r: EventRecord) =>
+      r.rrule ? (describe(r.rrule, r.startDate ?? undefined) ?? '繰り返し') : 'なし';
+    out.push(`繰り返し ${label(before)} → ${label(after)}`);
+  }
   return out;
 }
 

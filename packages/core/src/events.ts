@@ -7,6 +7,7 @@ import {
   toIsoJst,
   toJstParts,
 } from './jst';
+import { formatRrule, parseRrule, untilDate, untilFor } from './recurrence';
 import type { EventChanges, EventCreate, EventDTO, Visibility } from './schemas';
 
 /** サーバー内部の予定の形（時刻は epoch ミリ秒。§10） */
@@ -247,6 +248,28 @@ function finalize(
     }
   }
 
+  // 繰り返し（§11）: サブセットの検証と、決まった順への正規化。時刻ありの UNTIL はその日の 23:59:59（浮動時刻）、
+  // 終日は日付だけにする（rrule は日付だけの UNTIL を 0:00 と読み、時刻ありの最終日の回を落とすため）
+  let rrule: string | null = null;
+  if (raw.rrule !== null && raw.rrule.trim() !== '') {
+    const parsed = parseRrule(raw.rrule);
+    if (!parsed.ok) errors.push({ field: 'rrule', message: parsed.message });
+    else {
+      const rule = parsed.rule;
+      if (rule.until !== null) {
+        const untilDay = untilDate(rule.until);
+        rule.until = untilFor(untilDay, raw.allDay);
+        const first = startDate ?? (startAt === null ? null : toJstParts(startAt).date);
+        if (first && untilDay < first)
+          errors.push({
+            field: 'rrule',
+            message: '繰り返しの終わりは始まりの日より後にしてください',
+          });
+      }
+      rrule = formatRrule(rule);
+    }
+  }
+
   const visibility = raw.visibility;
   let forEveryone = raw.forEveryone;
   let memberIds = [...new Set(raw.memberIds)];
@@ -272,7 +295,7 @@ function finalize(
       endAt,
       startDate,
       endDate,
-      rrule: raw.rrule,
+      rrule,
       memberIds,
       forEveryone,
       busy: raw.busy ?? defaultBusy(raw.allDay, startDate, endDate),

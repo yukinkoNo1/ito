@@ -20,6 +20,8 @@ export interface ComposerParams {
   text: string | null;
   /** 「くわしく」を開いた状態で開く（場所・メモを直すとき） */
   more: boolean;
+  /** 繰り返しのどの回を直すか（recurrenceId。保存のときに C-04 で範囲を選ぶ） */
+  rid: string | null;
 }
 
 export interface OpenComposerOptions {
@@ -29,6 +31,7 @@ export interface OpenComposerOptions {
   duplicate?: string;
   text?: string;
   more?: boolean;
+  rid?: string;
 }
 
 interface NavApi {
@@ -44,7 +47,16 @@ interface NavApi {
 
 const NavContext = createContext<NavApi | null>(null);
 
-const COMPOSER_KEYS = ['compose', 'edit', 'duplicate', 'date', 'time', 'text', 'more'] as const;
+const COMPOSER_KEYS = [
+  'compose',
+  'edit',
+  'duplicate',
+  'date',
+  'time',
+  'text',
+  'more',
+  'rid',
+] as const;
 
 function homeLocation(key: string): Location {
   return { pathname: '/', search: '', hash: '', state: null, key };
@@ -72,6 +84,7 @@ export function NavProvider({ children }: { children: ReactNode }) {
             time: params.get('time'),
             text: params.get('text'),
             more: params.get('more') === '1',
+            rid: params.get('rid'),
           }
         : null;
 
@@ -114,6 +127,7 @@ export function NavProvider({ children }: { children: ReactNode }) {
           if (opts.duplicate) p.set('duplicate', opts.duplicate);
           if (opts.text) p.set('text', opts.text);
           if (opts.more) p.set('more', '1');
+          if (opts.rid) p.set('rid', opts.rid);
         }),
       closeComposer: () =>
         withParams((p) => {

@@ -8,12 +8,16 @@ import {
   type EventDTO,
   expand,
   fromJst,
+  fromPreset,
   type MemberDTO,
   type Occurrence,
+  occurrenceTimes,
   parseIsoToMs,
   type TrashItemDTO,
   todayJst,
   toJstParts,
+  toPreset,
+  wallOfRecurrenceId,
 } from '@ito/core';
 import type { LocalEvent } from '../data/db';
 import type { ActivityVM, EventDetailVM, EventDraftVM, TrashItemVM } from '../ui/types';
@@ -26,15 +30,31 @@ import {
 } from './labels';
 import { toOccurrenceVM, type VmContext } from './occurrence';
 
-/** 予定の回を探す（recurrenceId があればその回。繰り返しの展開は Phase 3） */
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * 予定の回を探す。recurrenceId があればその回（例外行で動かした回はその日時のまわり）だけを展開する
+ * （長い繰り返しでも 2,000 回の打ち切りに当たらないように）。なければ最初の回
+ */
 export function findOccurrence(
   event: LocalEvent,
   overrides: LocalEvent[],
   recurrenceId: string | null,
 ): Occurrence<LocalEvent> | null {
-  const all = expand(event, overrides, fromJst('1970-01-01'), fromJst(addDays('2100-12-31', 1)));
-  if (recurrenceId) return all.find((o) => o.recurrenceId === recurrenceId) ?? null;
-  return all[0] ?? null;
+  if (!recurrenceId) {
+    const all = expand(event, overrides, fromJst('1970-01-01'), fromJst(addDays('2100-12-31', 1)));
+    return all[0] ?? null;
+  }
+  const wall = wallOfRecurrenceId(recurrenceId);
+  if (!wall) return null;
+  const override = overrides.find((o) => o.recurrenceId === recurrenceId);
+  const moved = override ? occurrenceTimes(override) : null;
+  const center = moved?.startMs ?? fromJst(wall.date, wall.time);
+  return (
+    expand(event, overrides, center - 3 * DAY_MS, center + 3 * DAY_MS).find(
+      (o) => o.recurrenceId === recurrenceId,
+    ) ?? null
+  );
 }
 
 function nameOf(members: MemberDTO[], id: string): string {
@@ -156,17 +176,28 @@ export function eventToDraft(e: EventDTO): EventDraftVM {
     forEveryone: e.forEveryone,
     location: e.location ?? '',
     note: e.note ?? '',
-    recurrence: { kind: 'none' },
-    recurrenceEnd: { kind: 'never' },
+    ...recurrenceOf(e),
     myReminders: [],
     isPrivate: e.visibility === 'private',
     busy: e.busy,
   };
 }
 
+/** 予定の繰り返し → 書く画面の形（§22 RecurrenceVM・RecurrenceEndVM） */
+function recurrenceOf(e: EventDTO): Pick<EventDraftVM, 'recurrence' | 'recurrenceEnd'> {
+  const start = e.allDay
+    ? (e.startDate as string)
+    : toJstParts(parseIsoToMs(e.startAt as string) ?? 0).date;
+  const preset = toPreset(e.rrule, start);
+  return { recurrence: preset.recurrence, recurrenceEnd: preset.end };
+}
+
 /** 下書き → 保存の本文（時刻ありは JST の ISO に。終わりが始まりより前の時刻なら翌日） */
 export function draftToInput(d: EventDraftVM): EventCreateInput {
+  // 繰り返し（§11）: なしは null、UI で作れない形（カスタム）は今のまま（本文に入れない）
+  const rrule = fromPreset(d.recurrence, d.recurrenceEnd, d.allDay);
   const base = {
+    ...(rrule === undefined ? {} : { rrule }),
     title: d.title,
     note: d.note,
     location: d.location,

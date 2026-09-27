@@ -220,6 +220,7 @@ export function RecurrenceScopeDialog({
   open,
   action,
   offline,
+  lost,
   onChoose,
   onCancel,
 }: RecurrenceScopeDialogProps) {
@@ -240,9 +241,13 @@ export function RecurrenceScopeDialog({
         <Button onClick={() => onChoose('this')}>この予定だけ</Button>
         <Button disabled={offline} onClick={() => onChoose('following')}>
           これ以降すべて
+          {lost.following > 0 && (
+            <small>この回以降の個別の変更 {lost.following} 件は消えます</small>
+          )}
         </Button>
         <Button disabled={offline} onClick={() => onChoose('all')}>
           すべて
+          {lost.all > 0 && <small>個別の変更 {lost.all} 件は消えます</small>}
         </Button>
         {offline && <p>オフライン中は、ほかの回をまとめて変更できません。</p>}
       </section>

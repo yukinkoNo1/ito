@@ -45,7 +45,7 @@ async function feedJson(
   return displayFeedV1Schema.parse(await res.json());
 }
 
-/** 例のファイル（§13.1）と同じ予定を入れる。朝練（繰り返し）は Phase 3 */
+/** 例のファイル（§13.1）と同じ予定を入れる（朝練は毎週水曜の繰り返し） */
 async function seedExample() {
   const ev = (n: number) => `0192f5b1-0000-7000-8000-00000000e00${n}`;
   const add = async (who: Who, body: Record<string, unknown>) => {
@@ -85,6 +85,13 @@ async function seedExample() {
     memberIds: [IDS.yuki, IDS.mama],
     busy: false,
   });
+  await add('haru', {
+    ...timed('2026-09-16', '07:00', '08:30'),
+    id: ev(6),
+    title: '朝練',
+    memberIds: [IDS.haru],
+    rrule: 'FREQ=WEEKLY;BYDAY=WE',
+  });
   await add('papa', {
     ...timed('2026-10-01', '18:00', '20:00'),
     id: ev(7),
@@ -101,16 +108,56 @@ async function seedExample() {
 }
 
 describe('表示用フィード（§13.1・§21）', () => {
-  it('例のファイルと一致する（パースした値で比べる。Phase 1 は朝練を除く）', async () => {
+  it('例のファイルと一致する（パースした値で比べる。繰り返しの回＝朝練まで含めて）', async () => {
     const { token } = setup();
     await seedExample();
     const got = await feedJson(token);
     const example = displayFeedV1Schema.parse(JSON.parse(readFileSync(EXAMPLE_PATH, 'utf8')));
-    const withoutRecurring = {
-      ...example,
-      occurrences: example.occurrences.filter((o) => !o.key.includes('@')),
-    };
-    expect(got).toEqual(withoutRecurring);
+    expect(example.occurrences.some((o) => o.key.includes('@'))).toBe(true);
+    expect(got).toEqual(example);
+  });
+
+  it('「この回だけ変更」「この回だけ削除」がフィードに出て、ETag が変わる（回の key は変えない）', async () => {
+    const { token } = setup();
+    await seedExample();
+    const key = '0192f5b1-0000-7000-8000-00000000e006@2026-09-30T07:00';
+    const before = await feed(token);
+    const etag0 = before.headers.get('etag');
+    const moved = await send(ctx, 'PATCH', '/api/events/0192f5b1-0000-7000-8000-00000000e006', {
+      headers: { ...as('haru'), 'if-match': '1', 'idempotency-key': 'feed-ex-1' },
+      body: {
+        scope: 'this',
+        recurrenceId: '2026-09-30T07:00',
+        changes: {
+          title: '朝練（体育館）',
+          startAt: '2026-09-30T06:30:00+09:00',
+          endAt: '2026-09-30T08:00:00+09:00',
+        },
+      },
+    });
+    expect(moved.status).toBe(200);
+    const after = await feed(token);
+    const etag1 = after.headers.get('etag');
+    expect(etag1).not.toBe(etag0);
+    const occ = displayFeedV1Schema
+      .parse(await after.json())
+      .occurrences.find((o) => o.key === key);
+    expect(occ).toMatchObject({
+      title: '朝練（体育館）',
+      startAt: '2026-09-30T06:30:00+09:00',
+      endAt: '2026-09-30T08:00:00+09:00',
+    });
+    const removed = await send(
+      ctx,
+      'DELETE',
+      '/api/events/0192f5b1-0000-7000-8000-00000000e006?scope=this&recurrenceId=2026-09-30T07:00',
+      { headers: { ...as('haru'), 'if-match': '2', 'idempotency-key': 'feed-ex-2' } },
+    );
+    expect(removed.status).toBe(200);
+    const last = await feed(token);
+    expect(last.headers.get('etag')).not.toBe(etag1);
+    const keys = displayFeedV1Schema.parse(await last.json()).occurrences.map((o) => o.key);
+    expect(keys).not.toContain(key);
   });
 
   it('場所・メモ・作成者・更新日時・rrule・version は出さない。本文は 20KB 未満', async () => {

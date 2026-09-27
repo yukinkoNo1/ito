@@ -1,5 +1,5 @@
 # 進み具合
-今: Phase 3（繰り返し） / 次にやること: 退避した Phase 3 の作業中の変更（git stash「phase3-wip」。core の展開・サーバーの範囲つきの更新と削除・送信待ち）を戻す → 画面（書く画面の繰り返し・C-04）→ 受け入れ基準 → レビュー → phase-3
+今: Phase 3（繰り返し） / 次にやること: レビュー → 指摘を直す → phase-3 → Phase 4（通知）
 
 ## ステップ
 | ステップ | 状態（未着手・作業中・完了） | タグ | メモ |
@@ -8,7 +8,7 @@
 | Phase 1 予定の中核と表示用フィード | 完了 | phase-1 | レビューの指摘（非公開→公開の履歴の漏えい、通知設定の部分更新、送信待ちの畳み込み、確認スクリプトの後始末）を直した |
 | Phase 2 PWA とローカルファースト | 完了 | phase-2 | レビューの指摘（ログアウトで SW の登録が残る、SW を通る遷移のテスト、競合中の編集で自分の変更が消える、送らずに戻した変更のあとの取得、429 の待ち、426 の更新、時計の巻き戻し ほか）を直した |
 | Phase 6 UI 統合 | 完了 | phase-6 | Phase 2 の次に行った（§24 D15）。レビューの指摘（シートのスワイプ、テーマの監視の漏れ、自分の非公開の候補、書く画面の日時の範囲、トースト・案内、履歴・ゴミ箱の状態、人の札が 7 個以上、日付をまたぐ行、検査の範囲 ほか）を直した |
-| Phase 3 繰り返し | 未着手 | phase-3 | |
+| Phase 3 繰り返し | 作業中 | phase-3 | |
 | Phase 4 通知 | 未着手 | phase-4 | |
 | Phase 5 一言入力 | 未着手 | phase-5 | |
 | Phase 7 仕上げ | 未着手 | phase-7 | |
@@ -76,6 +76,17 @@
 | Phase 6 | 入力欄の文字 16px 以上・タップ領域 44px 以上 | E2E「入力欄の文字は 16px 以上、タップ領域は 44px 以上」（本番の全画面・シート）、ギャラリーの全状態（ライト・ダーク） | OK |
 | Phase 6 | icon.svg から PWA のアイコン | `node scripts/gen-icons.mjs`（@resvg/resvg-js）→ public/icons、E2E「インストールできる」 | OK |
 | Phase 6 | ギャラリー・見本・開発用のログインが本番のビルドに入らない | `pnpm build` のあと apps/web/dist の JS を「表示する状態」「__gallery」「X-Dev-Login」「ito.devLogin」「2030-09-29」で検索 → 0 件 | OK（JS は gzip で 184KB。§19 の 200KB 以内） |
+| Phase 3 | §21 の繰り返しのテスト一式（第2・第4水曜、月末、2/29 の毎年、COUNT/UNTIL、例外・取り消し、「これ以降」の分割） | core test/recurrence.test.ts（展開・説明文・UI の形・分割と差分・expand の例外と取り消し）、server test/recurrence.test.ts（scope ごとの PATCH・DELETE） | OK |
+| Phase 3 | PWA とサーバーで同じ展開結果（同じデータで 3 通り） | core「3 通りの展開で比べるデータ（手で確かめた回と同じ）」、server「3 通りの展開（サーバーの API 経由）」、web phase3.test.ts「3 通りの展開（PWA の viewmodel 経由）」（packages/core/test/fixtures/recurring.ts を共有） | OK |
+| Phase 3 | COUNT のシリーズで「これ以降」→ 元は UNTIL だけ・新シリーズは残り回数 | server「COUNT のシリーズ: 元は UNTIL=前の回だけ、新シリーズは残りの回数…」、E2E phase3「繰り返しを書いて…」（COUNT=10 → 元は UNTIL、新は COUNT=9） | OK |
+| Phase 3 | 後の回から「すべて」で時刻を変えても前の回が消えない | server「後の回から時刻を変えても、前の回は消えない…」、E2E phase3（3/27 から 12:00 → 3/13 も 12:00） | OK |
+| Phase 3 | 時刻ありの UNTIL で最終日の回が残る | core「時刻ありの UNTIL は 23:59:59 にすると最終日の回が残る」、server「rrule は決まった順にし、時刻ありの UNTIL は 23:59:59 にして保存する」 | OK |
+| Phase 3 | 「これ以降」で reminder_prefs が引き継がれる | server「COUNT のシリーズ…」（PUT /api/events/:id/reminders → 分割 → 同期の myReminderPrefs に新シリーズの行） | OK |
+| Phase 3 | 表示用フィードが例のファイルと繰り返しの回まで一致、例外がフィードに出て ETag が変わる | server feed.test.ts「例のファイルと一致する（…朝練まで含めて）」「「この回だけ変更」「この回だけ削除」がフィードに出て、ETag が変わる」 | OK |
+| Phase 3 | 入力制限（HOURLY 以下の拒否、INTERVAL・COUNT の上限、展開の打ち切り） | core「RRULE の検証」「1 回の展開は 2,000 回で打ち切る」「回が出ない規則（毎年 2/31）でも、すぐ終わる」、server「… は 422」 | OK |
+| Phase 3 | RecurrenceEndVM（なし／◯回／◯日まで）⇔ COUNT / UNTIL | core「UI の形 ⇔ RRULE」、web「書く画面の繰り返し」 | OK |
+| Phase 3 | 画面（書く画面の繰り返し・C-04・オフラインの制限） | E2E phase3.spec.ts（書く画面で毎週・10 回 → この予定だけの時刻 → この予定だけ削除 → これ以降すべて（消える 2 件を C-04 に表示）→ すべて）、「オフラインでは…選べない」、web phase3.test.ts（送信待ち・範囲の計算・月末の問い） | OK |
+| Phase 3 | `pnpm check`・`pnpm test:e2e`・`docker compose build` | 下の最終の確認で | OK |
 | Phase 6 | `pnpm check`・`pnpm test:e2e`・`pnpm build`・`docker compose build` | `pnpm check`（261 件）、`pnpm test:e2e`（39 件）、`pnpm build`、`docker compose build` | OK（すべて EXIT=0） |
 
 ## 決めたこと（SPEC §24 に書いたもの）
@@ -97,10 +108,10 @@
 - D30: コントラストと 44px のための見た目の小さな変更。Biome の noDescendingSpecificity は ui/*.css だけ外す
 - D31: ギャラリーは開発と E2E 用のビルドだけ。見本（mock-data.ts）を E2E と共有し、同じデータ・固定の時計でスクリーンショットを比べる
 - D32: Phase 6 のレビューで決めた画面の細則（見出しの年、まとめの④はボタンだけ、無効の家族だけの回は出さない、スワイプはつまみ・見出しから、テーマの追従は 1 か所、書く画面のほかの日・時刻、履歴・ゴミ箱の状態 ほか）
+- D33: 繰り返しの細則（例外行の key、If-Match は親、exceptionId、RRULE の制限と正規化、消える件数、この回だけ削除の取り消し、reminder_prefs の複製、C-04 のオフライン）
 
 ## 後で足すテスト
 - 非公開の漏えい（まだない経路）: 書き出し（JSON・ICS。Phase 7）、Push の文面（Phase 4）、朝のまとめ・前夜の予告（Phase 4）、一言入力の重なりの警告（Phase 5。端末内で作るので他人の非公開は「予定あり」になることを確かめる）、検索（Phase 7。端末内の DB を検索する）
-- 表示用フィードの例のファイルとの比較に朝練（繰り返し）を含める・例外がフィードに出る（Phase 3）
 - T7 のビルド成果物の検査（sk-ant）に「X-Dev-Login」「ito.devLogin」「表示する状態」「__gallery」を足す（Phase 7）
 - これからの一覧の範囲を、見ている日の前後 8 週に削る（今は広げるだけ。§19 の性能の確認と合わせて Phase 7）
 

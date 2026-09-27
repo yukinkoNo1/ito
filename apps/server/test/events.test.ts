@@ -99,7 +99,12 @@ describe('予定の作成（§13）', () => {
       timed('2026-09-29', '10:00', null, { memberIds: ['0192f5a0-1c00-7000-8000-00000000ffff'] }),
     ],
     ['担当なし', timed('2026-09-29', '10:00', null, { memberIds: [] })],
-    ['繰り返し（Phase 3 まで）', timed('2026-09-29', '10:00', null, { rrule: 'FREQ=WEEKLY' })],
+    // Phase 3 で繰り返しを受け付けた。§11 のサブセットの外は 422（くわしくは recurrence.test.ts）
+    ['毎時の繰り返し', timed('2026-09-29', '10:00', null, { rrule: 'FREQ=HOURLY' })],
+    [
+      '回数と終わりの日付の併用',
+      timed('2026-09-29', '10:00', null, { rrule: 'FREQ=DAILY;COUNT=3;UNTIL=20261231' }),
+    ],
     ['101 文字の件名', { ...timed('2026-09-29', '10:00', null), title: 'あ'.repeat(101) }],
   ])('%s は 422', async (_label, input) => {
     const { res } = await createEvent(ctx, 'papa', input);

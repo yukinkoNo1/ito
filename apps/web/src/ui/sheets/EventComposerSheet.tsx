@@ -106,6 +106,7 @@ export default function EventComposerSheet({
   onChooseAmbiguity,
   onSetMode,
   onSave,
+  children,
 }: ComposerSheetProps) {
   const [picker, setPicker] = useState<'date' | 'time' | null>(null);
   const dragStart = useRef<number | undefined>(undefined);
@@ -553,6 +554,7 @@ export default function EventComposerSheet({
             </section>
           </div>
         )}
+        {children}
       </section>
     </div>
   );

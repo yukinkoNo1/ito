@@ -1,4 +1,5 @@
 import { addDays, type DateISO, fromJst, parseIsoToMs, type TimeHM, toJstParts } from './jst';
+import { MAX_OCCURRENCES_PER_EXPAND, parseRrule, recurrenceIdOf, ruleStarts } from './recurrence';
 
 /** 展開に使う予定の項目（EventDTO の一部。サーバーも PWA も EventDTO で渡す） */
 export interface OccurrenceSource {
@@ -16,7 +17,7 @@ export interface OccurrenceSource {
 
 /** 表示単位の「1 回分」（§3） */
 export interface Occurrence<E extends OccurrenceSource = OccurrenceSource> {
-  /** 繰り返しなしは eventId、繰り返しは `親の ID@recurrenceId`（例外行でも同じ。RUNBOOK 3.。Phase 3 で §3・§24 に書く） */
+  /** 繰り返しなしは eventId、繰り返しは `親の ID@recurrenceId`（例外行でも同じ。§3・§24 D33） */
   key: string;
   /** 親（マスター）の ID。繰り返しなしは自分の ID */
   seriesId: string;
@@ -95,25 +96,87 @@ export function compareOccurrences(
 }
 
 /**
- * 予定を [fromMs, toMs) の回に展開する（§11）。サーバー（通知・表示用フィード）と PWA（表示）で共有する。
- * overrides はこの予定の例外行（「この回だけ変更」）。繰り返しは Phase 3 で recurrence.ts が受け持つ。
+ * 予定を [fromMs, toMs) にかかる回に展開する（§11）。サーバー（通知・表示用フィード）と PWA（表示）で共有する。
+ * - 繰り返しなし: 予定そのものが 1 回（key は eventId）
+ * - 繰り返し: rrule の回（key は `親の ID@recurrenceId`）。exdates の回は出さない。
+ *   overrides はこの予定の例外行（「この回だけ変更」）で、同じ recurrenceId の回を置き換える（key は変えない。§3・§24 D33）。
+ *   例外行は自分の日時で範囲にかかるかを見る（元の回が範囲の外でも、動かした先が範囲にあれば出す）
+ * - 1 回の展開は最大 2,000 回で打ち切る
  */
 export function expand<E extends OccurrenceSource>(
   event: E,
-  _overrides: readonly E[],
+  overrides: readonly E[],
   fromMs: number,
   toMs: number,
 ): Occurrence<E>[] {
   const times = occurrenceTimes(event);
   if (!times) return [];
-  const occ: Occurrence<E> = {
-    key: event.id,
-    seriesId: event.id,
-    recurrenceId: null,
-    event,
-    ...times,
-  };
-  return overlapsRange(occ, fromMs, toMs) ? [occ] : [];
+  const parsed = event.rrule ? parseRrule(event.rrule) : null;
+  if (!parsed?.ok) {
+    const occ: Occurrence<E> = {
+      key: event.id,
+      seriesId: event.id,
+      recurrenceId: null,
+      event,
+      ...times,
+    };
+    return overlapsRange(occ, fromMs, toMs) ? [occ] : [];
+  }
+  const rule = parsed.rule;
+  const allDay = times.allDay;
+  const dtstart = { date: times.startDate, time: times.startTime ?? '00:00' };
+  const length = times.endMs === null ? 0 : times.endMs - times.startMs;
+  const exdates = new Set(event.exdates);
+  const overridden = new Map<string, E>();
+  for (const o of overrides) if (o.recurrenceId) overridden.set(o.recurrenceId, o);
+  // 回の開始が [fromMs - 長さ, toMs) にあれば、範囲にかかりうる（壁時計の分の単位で広めに取る）
+  const fromWall = toJstParts(fromMs - length - 60_000);
+  const toWall = toJstParts(toMs + 60_000);
+  const starts = ruleStarts(
+    rule,
+    dtstart,
+    { date: fromWall.date, time: fromWall.time },
+    { date: toWall.date, time: toWall.time },
+  );
+  const out: Occurrence<E>[] = [];
+  for (const start of starts) {
+    const rid = recurrenceIdOf(start, allDay);
+    if (exdates.has(rid) || overridden.has(rid)) continue;
+    const startMs = fromJst(start.date, allDay ? '00:00' : start.time);
+    const endMs = times.endMs === null ? null : startMs + length;
+    const end = endMs === null ? null : toJstParts(endMs);
+    const occ: Occurrence<E> = {
+      key: `${event.id}@${rid}`,
+      seriesId: event.id,
+      recurrenceId: rid,
+      event,
+      allDay,
+      startMs,
+      endMs,
+      startDate: start.date,
+      // 終日は最終日（含む）、時刻ありは終わる日
+      endDate: allDay
+        ? addDays(start.date, Math.round(length / 86_400_000) - 1)
+        : (end?.date ?? start.date),
+      startTime: allDay ? null : start.time,
+      endTime: allDay || !end ? null : end.time,
+    };
+    if (overlapsRange(occ, fromMs, toMs)) out.push(occ);
+  }
+  for (const [rid, o] of overridden) {
+    if (exdates.has(rid)) continue;
+    const t = occurrenceTimes(o);
+    if (!t) continue;
+    const occ: Occurrence<E> = {
+      key: `${event.id}@${rid}`,
+      seriesId: event.id,
+      recurrenceId: rid,
+      event: o,
+      ...t,
+    };
+    if (overlapsRange(occ, fromMs, toMs)) out.push(occ);
+  }
+  return out.slice(0, MAX_OCCURRENCES_PER_EXPAND);
 }
 
 /**

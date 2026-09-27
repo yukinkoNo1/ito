@@ -1,5 +1,6 @@
 import {
   type DateISO,
+  describe,
   type EventDTO,
   expandAll,
   fromJst,
@@ -18,8 +19,6 @@ export interface VmContext {
   members: MemberDTO[];
   /** この端末で前回開いた時刻（新着の印。F-21）。null なら印を付けない */
   freshSince: number | null;
-  /** 繰り返しの説明（Phase 3 で describe をつなぐ） */
-  describeRrule?: (rrule: string) => string | null;
 }
 
 export function activeMembers(members: MemberDTO[]): MemberDTO[] {
@@ -59,7 +58,12 @@ export function toOccurrenceVM(occ: Occurrence<LocalEvent>, ctx: VmContext): Occ
     forEveryone: e.forEveryone,
     location: e.location,
     note: e.note,
-    recurrenceLabel: e.rrule && ctx.describeRrule ? ctx.describeRrule(e.rrule) : null,
+    // 繰り返しの説明（§11）。「この回だけ変更」の回（例外行）はそう書く
+    recurrenceLabel: e.rrule
+      ? describe(e.rrule, e.startDate ?? occ.startDate)
+      : occ.recurrenceId
+        ? 'この回だけ変更'
+        : null,
     isPrivate: e.visibility === 'private',
     busy: e.busy,
     sync: e.sync,

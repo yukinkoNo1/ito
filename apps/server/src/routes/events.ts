@@ -1,12 +1,32 @@
-import { eventCreateSchema, eventPatchSchema, toIsoJst, uuidSchema } from '@ito/core';
+import {
+  eventCreateSchema,
+  eventPatchSchema,
+  recurrenceIdSchema,
+  remindersPutSchema,
+  toIsoJst,
+  uuidSchema,
+} from '@ito/core';
 import type { Context } from 'hono';
+import { z } from 'zod';
 import type { App, AppDeps } from '../app';
 import { ApiError } from '../errors';
 import { RateLimiter } from '../lib/rate-limit';
 import { parseBody, parseIdempotencyKey, parseIfMatch, parseWith } from '../lib/validate';
 import { createEvent, deleteEvent, listTrash, restoreEvent, updateEvent } from '../services/events';
 import { type StoredResponse, withIdempotency } from '../services/idempotency';
+import { setMyReminders } from '../services/reminders';
 import type { AppEnv } from '../types';
+
+/** DELETE /api/events/:id?scope=&recurrenceId=（§13） */
+const deleteQuerySchema = z
+  .object({
+    scope: z.enum(['this', 'following', 'all']).default('all'),
+    recurrenceId: recurrenceIdSchema.optional(),
+  })
+  .strict();
+
+/** POST /api/events/:id/restore?recurrenceId=（「この回だけ削除」の取り消し） */
+const restoreQuerySchema = z.object({ recurrenceId: recurrenceIdSchema.optional() }).strict();
 
 /** 1 メンバーの予定作成 60 件/分（§18 T10） */
 const CREATE_RATE_PER_MIN = 60;
@@ -57,7 +77,7 @@ export function registerEventRoutes(app: App, deps: AppDeps): void {
     const patch = await parseBody(c, eventPatchSchema);
     const result = withIdempotency(db, clock, me.id, key, (tx) => {
       const ifMatch = parseIfMatch(c);
-      return updateEvent(tx, clock, me, id, ifMatch, patch.changes);
+      return updateEvent(tx, clock, me, id, ifMatch, patch);
     });
     return respond(c, result);
   });
@@ -66,18 +86,32 @@ export function registerEventRoutes(app: App, deps: AppDeps): void {
     const me = c.get('me');
     const id = eventIdParam(c);
     const key = parseIdempotencyKey(c);
+    const q = parseWith(deleteQuerySchema, {
+      scope: c.req.query('scope'),
+      recurrenceId: c.req.query('recurrenceId'),
+    });
     const result = withIdempotency(db, clock, me.id, key, (tx) => {
       const ifMatch = parseIfMatch(c);
-      return deleteEvent(tx, clock, me, id, ifMatch);
+      return deleteEvent(tx, clock, me, id, ifMatch, q.scope, q.recurrenceId ?? null);
     });
     return respond(c, result);
+  });
+
+  app.put('/api/events/:id/reminders', async (c) => {
+    const me = c.get('me');
+    const id = eventIdParam(c);
+    const body = await parseBody(c, remindersPutSchema);
+    return c.json(setMyReminders(db, me, id, body.offsets));
   });
 
   app.post('/api/events/:id/restore', async (c) => {
     const me = c.get('me');
     const id = eventIdParam(c);
     const key = parseIdempotencyKey(c);
-    const result = withIdempotency(db, clock, me.id, key, (tx) => restoreEvent(tx, clock, me, id));
+    const rid = parseWith(restoreQuerySchema, { recurrenceId: c.req.query('recurrenceId') });
+    const result = withIdempotency(db, clock, me.id, key, (tx) =>
+      restoreEvent(tx, clock, me, id, rid.recurrenceId ?? null),
+    );
     return respond(c, result);
   });
 

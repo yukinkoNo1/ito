@@ -334,6 +334,7 @@ function Detail({ scenario }: { scenario: Scenario }) {
           />
           <RecurrenceScopeDialog
             action="delete"
+            lost={{ following: 2, all: 0 }}
             offline={false}
             onCancel={noop}
             onChoose={noop}

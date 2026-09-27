@@ -17,12 +17,32 @@ import { ApiError } from '../errors';
 import { validationError } from '../lib/validate';
 import { describeDiff, hideActivityOf, memberNames, recordActivity } from './activity';
 import { insertRecord, loadEvent, loadExceptions, recordChange, updateRecord } from './records';
+import {
+  allScopeChanges,
+  type Discarded,
+  deleteFollowing,
+  deleteThisOccurrence,
+  resetIfStartsChange,
+  type Scope,
+  updateFollowing,
+  updateThisOccurrence,
+} from './series';
 
 export const TRASH_DAYS = 30;
 
 export interface EventResult {
   status: 200 | 201;
-  body: { event: EventDTO } | { id: string; version: number };
+  body:
+    | { event: EventDTO; exception?: EventDTO; created?: EventDTO; discarded?: Discarded }
+    | { id: string; version: number };
+}
+
+/** PATCH /api/events/:id の本文（§13） */
+export interface EventPatch {
+  scope: Scope;
+  recurrenceId?: string | null | undefined;
+  exceptionId?: string | undefined;
+  changes: EventChanges;
 }
 
 function activeMemberIds(db: DbLike): Set<string> {
@@ -58,11 +78,6 @@ function checkMembers(db: DbLike, memberIds: string[], previous: string[] = []):
     throw validationError([{ field: 'memberIds', message: '家族にいない人は選べません' }]);
 }
 
-/** 繰り返しは Phase 3 で受け付ける。それまでは rrule・例外行を拒否する */
-function rejectRecurrence(rrule: string | null | undefined): void {
-  if (rrule) throw validationError([{ field: 'rrule', message: '繰り返しはまだ使えません' }]);
-}
-
 /** 他人の非公開は中身も操作も持ち主だけ（§14）。認可は If-Match より先に確かめる */
 export function authorize(record: EventRecord, me: MemberRow): void {
   if (!canSeeContent(record, me.id))
@@ -84,7 +99,22 @@ function loadForWrite(db: DbLike, id: string): EventRecord {
   const record = loadEvent(db, id);
   if (!record) throw new ApiError(404, 'not_found');
   if (record.deletedAt !== null) throw new ApiError(410, 'gone');
+  if (record.parentId !== null) {
+    // 例外行は、親の予定に scope=this で変える（owner・visibility を親から複製するため。§10）
+    throw validationError([
+      { field: 'id', message: 'この回の変更は、繰り返しの予定に scope=this で送ってください' },
+    ]);
+  }
   return record;
+}
+
+function requireRecurrenceId(rid: string | null | undefined): string {
+  if (!rid) {
+    throw validationError([
+      { field: 'recurrenceId', message: 'どの回かを recurrenceId で指定してください' },
+    ]);
+  }
+  return rid;
 }
 
 export function createEvent(
@@ -93,7 +123,6 @@ export function createEvent(
   me: MemberRow,
   input: EventCreate,
 ): EventResult {
-  rejectRecurrence(input.rrule);
   if (input.parentId || input.recurrenceId || (input.exdates && input.exdates.length > 0)) {
     throw validationError([
       { field: 'parentId', message: '例外行は PATCH（scope=this）で作ってください' },
@@ -129,25 +158,65 @@ export function createEvent(
   return { status: 201, body: { event: projectEvent(record, me.id) } };
 }
 
+/**
+ * 予定の更新（§13）。繰り返しの予定は scope で範囲を選ぶ（§11）: this＝この回だけ（例外行）、
+ * following＝これ以降（分割）、all＝すべて（日時は選んだ回からの差分）。繰り返しなしは scope に関係なく全体
+ */
 export function updateEvent(
   db: DbLike,
   clock: Clock,
   me: MemberRow,
   id: string,
   ifMatch: number | null,
-  changes: EventChanges,
+  patch: EventPatch,
 ): EventResult {
   const current = loadForWrite(db, id);
   authorize(current, me);
+  const { changes: rawChanges } = patch;
   if (
-    changes.visibility !== undefined &&
-    changes.visibility !== current.visibility &&
+    rawChanges.visibility !== undefined &&
+    rawChanges.visibility !== current.visibility &&
     current.ownerId !== me.id
   ) {
     throw new ApiError(403, 'forbidden', '公開・非公開を変えられるのは作った人だけです');
   }
   checkVersion(current, ifMatch, me);
-  rejectRecurrence(changes.rrule ?? current.rrule);
+  const ordered = (ids: string[]) => orderMemberIds(db, ids);
+  const check = (ids: string[], previous: string[]) => checkMembers(db, ids, previous);
+  if (current.rrule !== null && patch.scope === 'this') {
+    const rid = requireRecurrenceId(patch.recurrenceId);
+    return updateThisOccurrence(
+      db,
+      clock,
+      me,
+      current,
+      rid,
+      patch.exceptionId,
+      rawChanges,
+      ordered,
+      check,
+    );
+  }
+  if (current.rrule !== null && patch.scope === 'following') {
+    const rid = requireRecurrenceId(patch.recurrenceId);
+    const split = updateFollowing(
+      db,
+      clock,
+      me,
+      current,
+      rid,
+      patch.exceptionId,
+      rawChanges,
+      ordered,
+      check,
+    );
+    if (split) return split;
+    // 初回の「これ以降」は「すべて」と同じ（§11）
+  }
+  const changes =
+    current.rrule !== null
+      ? allScopeChanges(db, current, patch.recurrenceId, rawChanges)
+      : rawChanges;
 
   const fields = fieldsFromChanges(current, changes);
   if ('errors' in fields) throw validationError(fields.errors);
@@ -155,13 +224,14 @@ export function updateEvent(
   checkMembers(db, f.memberIds, current.memberIds);
 
   const now = clock.now();
-  const next: EventRecord = {
-    ...current,
-    ...f,
-    version: current.version + 1,
-    updatedBy: me.id,
-    updatedAt: now,
-  };
+  // 繰り返しの回の開始が変わるなら、例外・取り消しをリセットする（§11。件数を返す）
+  const { next, discarded } = resetIfStartsChange(
+    db,
+    me,
+    current,
+    { ...current, ...f, version: current.version + 1, updatedBy: me.id, updatedAt: now },
+    now,
+  );
   const membersChanged =
     next.forEveryone !== current.forEveryone ||
     next.memberIds.join(',') !== current.memberIds.join(',');
@@ -179,7 +249,11 @@ export function updateEvent(
     recordActivity(db, clock, me.id, 'update', next, diff);
   }
   recordChange(db, 'event', id, now);
-  return { status: 200, body: { event: projectEvent(next, me.id) } };
+  const event = projectEvent(next, me.id);
+  return {
+    status: 200,
+    body: current.rrule !== null || next.rrule !== null ? { event, discarded } : { event },
+  };
 }
 
 /**
@@ -202,16 +276,29 @@ export function propagateToExceptions(db: DbLike, parent: EventRecord, now: numb
   }
 }
 
+/**
+ * 削除（ゴミ箱へ。§13）。繰り返しの予定は scope で範囲を選ぶ（§11）: this＝この回だけ（親の exdates に足す）、
+ * following＝これ以降（前の回で終える。初回ならシリーズごと）、all＝シリーズごと
+ */
 export function deleteEvent(
   db: DbLike,
   clock: Clock,
   me: MemberRow,
   id: string,
   ifMatch: number | null,
+  scope: Scope = 'all',
+  recurrenceId: string | null = null,
 ): EventResult {
   const current = loadForWrite(db, id);
   authorize(current, me);
   checkVersion(current, ifMatch, me);
+  if (current.rrule !== null && scope === 'this') {
+    return deleteThisOccurrence(db, clock, me, current, requireRecurrenceId(recurrenceId));
+  }
+  if (current.rrule !== null && scope === 'following') {
+    const r = deleteFollowing(db, clock, me, current, requireRecurrenceId(recurrenceId));
+    if (r) return r;
+  }
   const now = clock.now();
   const next: EventRecord = {
     ...current,
@@ -237,10 +324,17 @@ export function deleteEvent(
   return { status: 200, body: { id, version: next.version } };
 }
 
-export function restoreEvent(db: DbLike, clock: Clock, me: MemberRow, id: string): EventResult {
+export function restoreEvent(
+  db: DbLike,
+  clock: Clock,
+  me: MemberRow,
+  id: string,
+  recurrenceId: string | null = null,
+): EventResult {
   const current = loadEvent(db, id);
   if (!current || current.parentId !== null) throw new ApiError(404, 'not_found');
   authorize(current, me);
+  if (recurrenceId !== null) return restoreOccurrence(db, clock, me, current, recurrenceId);
   if (current.deletedAt === null)
     return { status: 200, body: { event: projectEvent(current, me.id) } };
   if (current.deletedAt <= clock.now() - TRASH_DAYS * 24 * 60 * 60 * 1000)
@@ -267,6 +361,52 @@ export function restoreEvent(db: DbLike, clock: Clock, me: MemberRow, id: string
   }
   recordActivity(db, clock, me.id, 'restore', next);
   recordChange(db, 'event', id, now);
+  return { status: 200, body: { event: projectEvent(next, me.id) } };
+}
+
+/**
+ * 「この回だけ削除」の取り消し（§6.1 の「元に戻す」）: 親の exdates から外し、その回の例外行をゴミ箱から戻す
+ */
+function restoreOccurrence(
+  db: DbLike,
+  clock: Clock,
+  me: MemberRow,
+  master: EventRecord,
+  rid: string,
+): EventResult {
+  if (master.deletedAt !== null) throw new ApiError(410, 'gone');
+  if (!master.exdates.includes(rid)) {
+    return { status: 200, body: { event: projectEvent(master, me.id) } };
+  }
+  const now = clock.now();
+  const since = now - TRASH_DAYS * 24 * 60 * 60 * 1000;
+  const trashed = loadExceptions(db, master.id)
+    .filter((e) => e.recurrenceId === rid && e.deletedAt !== null && e.deletedAt > since)
+    .sort((a, b) => (b.deletedAt ?? 0) - (a.deletedAt ?? 0))[0];
+  if (trashed) {
+    updateRecord(
+      db,
+      {
+        ...trashed,
+        version: trashed.version + 1,
+        deletedAt: null,
+        deletedBy: null,
+        updatedAt: now,
+      },
+      false,
+    );
+    recordChange(db, 'event', trashed.id, now);
+  }
+  const next: EventRecord = {
+    ...master,
+    exdates: master.exdates.filter((d) => d !== rid),
+    version: master.version + 1,
+    updatedAt: now,
+    updatedBy: me.id,
+  };
+  updateRecord(db, next, false);
+  recordActivity(db, clock, me.id, 'restore', next, [`${rid.slice(5, 10).replace('-', '/')} の回`]);
+  recordChange(db, 'event', master.id, now);
   return { status: 200, body: { event: projectEvent(next, me.id) } };
 }
 

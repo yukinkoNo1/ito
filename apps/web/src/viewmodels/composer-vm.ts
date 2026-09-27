@@ -9,7 +9,7 @@ import {
   weekdayOf,
 } from '@ito/core';
 import type { LocalEvent } from '../data/db';
-import type { ComposerVM, EventDraftVM, MemberVM, TimeHM } from '../ui/types';
+import type { AmbiguityVM, ComposerVM, EventDraftVM, MemberVM, TimeHM } from '../ui/types';
 
 export const QUICK_TIMES: TimeHM[] = ['09:00', '12:00', '15:00', '18:00', '19:00'];
 export const COMPOSER_EXAMPLES = [
@@ -191,4 +191,19 @@ export function dateRange(today: DateISO): { min: DateISO; max: DateISO } {
 export function isReasonableDate(date: DateISO, today: DateISO): boolean {
   const d = diffDays(today, date);
   return d >= -366 && d <= 366 * 3;
+}
+
+/** 29〜31 日の毎月なら「月末にしますか？」（§11） */
+export function monthEndQuestion(draft: EventDraftVM, chosen: number | null): AmbiguityVM | null {
+  const r = draft.recurrence;
+  if (r.kind !== 'monthlyByDate' || r.day < 29) return null;
+  return {
+    field: 'recurrence',
+    question: `毎月${r.day}日は、${r.day}日のない月はとばします。月末にしますか？`,
+    options: [
+      { label: `${r.day}日のまま`, patch: {} },
+      { label: '月末にする', patch: { recurrence: { kind: 'monthlyByDate', day: -1 } } },
+    ],
+    chosen,
+  };
 }

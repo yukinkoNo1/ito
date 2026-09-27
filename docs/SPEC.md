@@ -3,7 +3,7 @@
 > 対象読者: 実装担当（Claude Code）と開発者本人。**このファイルが仕様の唯一の正**。実装中に仕様と違う判断をしたら §24 決定ログに追記する。
 > 作成日: 2026-09-27 ／ アプリ名「いと」（糸）は仮称。家族一人ひとりを1本の糸として描くデザインから。
 > v1.1（2026-09-27）: リビングの家族ダッシュボード「いえボード」に予定を渡す**表示用フィード**を追加（§13.1。関連して §1・2・3・5・7・9・10・13・14・18・19・20・21・23・24・25・付録A を更新。メンバーの名前の重複禁止と、Tailscale の全許可の規則の送信元を人の端末に絞る変更を含む）。いと の画面は変えていない（§22 はそのまま）。
-> v1.2（自走中の変更）: §24（D15〜）、§10（feed_tokens の last_user_device_at）、付録A（STATIC_DIR・MAX_MEMBERS の上限）、§12 の同期の細則（D28）、§16 の書く画面の決まり、§22 の型（D29）
+> v1.2（自走中の変更）: §24（D15〜）、§10（feed_tokens の last_user_device_at）、付録A（STATIC_DIR・MAX_MEMBERS の上限）、§12 の同期の細則（D28）、§16 の書く画面の決まり、§22 の型（D29・D32・D33）、§3・§13 の繰り返しの細則（D33）
 
 ## 目次
 1. 概要とゴール / 2. 前提・制約 / 3. 用語 / 4. ユーザーストーリー / 5. 機能一覧 / 6. 画面構成と遷移 / 7. システム構成 / 8. 技術スタック / 9. リポジトリ構成 / 10. データモデル / 11. 日時・終日・繰り返し / 12. 同期（ローカルファースト） / 13. API（13.1 表示用フィード） / 14. 認証・認可 / 15. 通知 / 16. 一言入力（AI解析） / 17. PWA / 18. セキュリティ / 19. 非機能要件 / 20. デプロイと運用 / 21. テスト戦略 / 22. UI契約とUI統合 / 23. 実装フェーズと受け入れ基準 / 24. 決定ログ / 25. 将来の拡張 / 付録A 環境変数 / 付録B 家族の端末セットアップ
@@ -47,7 +47,7 @@
 |---|---|
 | メンバー | 家族の一人。Tailscale のログイン（例 `mama@example.com`）と 1 対 1 |
 | 予定（event） | 保存単位。繰り返し予定は 1 行（マスター）＋例外行 |
-| 回（occurrence） | 表示単位。繰り返し予定を展開した 1 回分。キーは `eventId` または `eventId@recurrenceId` |
+| 回（occurrence） | 表示単位。繰り返し予定を展開した 1 回分。キーは `eventId` または `eventId@recurrenceId`（「この回だけ変更」の回も、変更前と同じ `親の ID@recurrenceId`。§24 D33） |
 | recurrenceId | 繰り返しの元の回の開始（JST の壁時計）。時刻あり `YYYY-MM-DDTHH:mm`、終日 `YYYY-MM-DD` |
 | 家族全員（forEveryone） | メンバーを列挙せず「全員」を指定。後から増えたメンバーも含む |
 | 非公開（private） | 作成者だけが内容を見られる予定。他の家族には「予定あり」だけが見える |
@@ -370,9 +370,9 @@ SQLite。ID は UUIDv7（時刻順に並ぶ）。時刻は epoch ミリ秒（UTC
 | PATCH | `/api/me` | 名前・略称・色・呼び名・設定 |
 | GET | `/api/sync?cursor=` | 差分同期 → `{ cursor, full, events[], deletedEventIds[], members[], myReminderPrefs[], me, unreadActivity }` |
 | POST | `/api/events` | 作成（本文に `id` 可、`Idempotency-Key` 必須） |
-| PATCH | `/api/events/:id` | 更新。`If-Match` 必須。本文 `{ scope: 'this'｜'following'｜'all', recurrenceId?, changes }` |
+| PATCH | `/api/events/:id` | 更新。`If-Match` 必須。本文 `{ scope: 'this'｜'following'｜'all', recurrenceId?, exceptionId?, changes }`（繰り返しは `:id`・If-Match とも親。exceptionId は this の例外行・following の新シリーズの ID。応答に exception・created・discarded。§24 D33） |
 | DELETE | `/api/events/:id?scope=&recurrenceId=` | 削除（ゴミ箱へ）。`If-Match` 必須 |
-| POST | `/api/events/:id/restore` | ゴミ箱から復元 |
+| POST | `/api/events/:id/restore` | ゴミ箱から復元。`?recurrenceId=` なら「この回だけ削除」の取り消し（§24 D33） |
 | PUT | `/api/events/:id/reminders` | 自分の通知 `{ offsets: number[] }`（最大 3、-10080〜1440） |
 | GET | `/api/trash` | ゴミ箱（見てよいもの） |
 | GET | `/api/activity?before=&limit=` | 履歴（最大 50 件ずつ） |
@@ -924,7 +924,7 @@ volumes:
 - **色の正は `ui/tokens.css`**。値は下の色と同じはず（UI 担当 AI に渡した値）。違っていたら下の値に戻す。淡い面は `color-mix(in oklab, 糸の色 10%, var(--paper))`（ダークは 20%）。Tailwind の `@theme` は tokens.css へ接続する
 - 端末のダーク設定への追従は本体側で行う（`prefers-color-scheme` を見て `html` に `data-theme` を付ける。ユーザーが選んだテーマがあればそちらを優先）
 - 文字の大きさ（標準／大きめ）は `html` の `font-size` で切り替える（100% / 115%）。UI の寸法は rem で作られている前提で、px 固定の箇所は Phase 6 で rem に直す
-- 下の型が画面の props の正。変えるときはこの節を更新する（`apps/web/src/ui/types.ts` と同じであることを web のテストで確かめる）。Phase 6 で足したもの: `AppShellProps.screen`・`AppShellProps.overlay`、`EventDetailScreenProps.children`、`FieldEditSheetProps`、`SyncVM.errorLabel`・`SyncVM.action`（§24 D29）、`ConflictSheetProps.deleted`、`ActivityScreenProps.status`・`hasMore`、`TrashScreenProps.status`、`FlowScreenProps.headerDateLabel` の年（§24 D32）
+- 下の型が画面の props の正。変えるときはこの節を更新する（`apps/web/src/ui/types.ts` と同じであることを web のテストで確かめる）。Phase 6 で足したもの: `AppShellProps.screen`・`AppShellProps.overlay`、`EventDetailScreenProps.children`、`FieldEditSheetProps`、`SyncVM.errorLabel`・`SyncVM.action`（§24 D29）、`ConflictSheetProps.deleted`、`ActivityScreenProps.status`・`hasMore`、`TrashScreenProps.status`、`FlowScreenProps.headerDateLabel` の年（§24 D32）、`RecurrenceScopeDialogProps.lost`・`ComposerSheetProps.children`（§24 D33）
 
 **色（UI 担当 AI に渡した値）**
 ```css
@@ -1376,6 +1376,7 @@ export interface RecurrenceScopeDialogProps {
   open: boolean;
   action: 'edit' | 'delete';
   offline: boolean; // true なら「これ以降」「すべて」を無効にして理由を表示
+  lost: { following: number; all: number }; // その範囲を選ぶと消える、個別の変更・取り消しの件数（§11。§24 D33）
   onChoose: (scope: 'this' | 'following' | 'all') => void;
   onCancel: () => void;
 }
@@ -1394,6 +1395,8 @@ export interface ComposerSheetProps {
   onChooseAmbiguity: (ambiguityIndex: number, optionIndex: number) => void;
   onSetMode: (mode: 'quick' | 'detail') => void; // detail =「くわしく」を開いた状態
   onSave: () => void;
+  /** 書く画面の中に重ねるダイアログ（繰り返しの範囲 C-04。§24 D33） */
+  children?: ReactNode;
 }
 
 /** 競合の解決 */
@@ -1606,6 +1609,7 @@ export interface OfflineBannerProps {
 | D30 | コントラストと 44px のための見た目の小さな変更（過去の行・月の外の日の opacity を文字の色に、糸の色の文字を text の色に、週の帯の高さを 2.75rem に、月の画面の週の始まりの切り替えを外す＝設定にある）。Biome の `noDescendingSpecificity` は書き出しの CSS（`ui/*.css`）だけ外す（並べ替えると見た目が変わる）。`role="group"` の div は fieldset にしない（既定の枠と flex の差で見た目が変わる） | §23 Phase 6 の axe の違反ゼロと、§6.1 のタップ領域 44px。「見た目は変えない」（§22）の範囲で直す | 色の値そのものを変える（§22 の色の正を変えることになる） |
 | D31 | ギャラリーは開発と E2E 用のビルドにだけ入れる（本番のビルドでは分岐ごと消える）。`/__gallery?s=<状態>&theme=dark&bare=1`（bare は枠なし）。見本（`ui/mock-data.ts`）は import のない素のデータにし、ギャラリーは本番と同じ viewmodels で §22 の型にする。E2E は同じ予定を API で入れ、時計を 2030-09-29 14:18 に止めて、ギャラリーの状態と本番の画面の `.app-shell` のスクリーンショットを比べる（ほかの E2E が作る予定と重ならないように先の年） | RUNBOOK 3. と §23 Phase 6 の「ギャラリーの状態と本番画面のスクリーンショットが一致する」を、同じデータ・固定の時計で確かめるため | 本番のビルドにも入れる／ギャラリーの見本を手で §22 の型に書く（本番の組み立てと食い違っても気づけない） |
 | D32 | Phase 6 のレビューで決めた画面の細則: 見出しの日付は今日の年・日付・曜日（`'2026年 9月27日 日曜日'`）。「新しい予定 n件」はボタンだけで出し、まとめの文には入れない。入力例は手元に予定が 1 件もないときだけ。無効にした家族だけが担当の回はこれから・月に出さない（表示用フィードと同じ）。人の札が 7 個以上なら横にスクロール。シートは、つまみ・見出しからの引き下ろしで閉じる（詳細は中身が一番上のときも。書く画面は書きかけを消さないようにつまみ・見出しだけ）。新しい版のトーストは、シートを開いているあいだは出さない。はじめて・追加ガイドにもトーストと同期が止まった理由を出す。テーマの配色の追従は 1 か所で持ち、選んだテーマに color-scheme・theme-color も合わせる。書く画面にほかの日・ほかの時刻と、「くわしく」の開始日・開始と終わりの時刻を足す（札にない日を選んだらその日の札を足す）。日付へ移動したら、その日の前後 8 週を描く。競合のシートに削除の別を、履歴・ゴミ箱に読み込み中・オフラインと続きの有無を渡す | Phase 6 のレビュー（P6-*）で見つかった崩れ・後退・誤解を招く表示を、§6.1・§19・§22 の意図に沿って直すため | 書き出しのまま（札は 6 列固定、シート全体でスワイプ、42 日だけの日付選択など） |
+| D33 | 繰り返しの細則: 例外行の回の key も `親の ID@recurrenceId`。PATCH・DELETE の `:id` は親で、If-Match は親の version（この回だけの変更・取り消しでも親の version を上げる＝シリーズ単位の楽観ロック）。本文の exceptionId は scope=this では例外行の ID、following では新しいシリーズの ID（クライアントが振る。オフラインで手元に出すため）。例外行を直接 PATCH しない（422）。RRULE は §11 のサブセットのうち、毎日・毎週は BYDAY だけ（BYMONTH・BYMONTHDAY などで回が 1 つも出ない規則を作れないように）、第 n 曜日は毎月・毎年だけ、BYHOUR・BYMINUTE・BYSECOND・DTSTART・TZID は拒否。保存は決まった順に正規化し、時刻ありの UNTIL は 23:59:59、終日は日付だけ。「これ以降」「すべて」で消える例外・取り消しの件数を応答（discarded）と C-04（lost）に出す。「すべて」で日付が動いたら毎週の曜日・毎月の日もずらす。「この回だけ削除」は restore?recurrenceId= で元に戻せる。「これ以降」の変更・削除は元に戻さない（C-04 で件数を見せて確かめる）。reminder_prefs は表と PUT をこの段階で作り、分割で新シリーズに複製する（送るのは Phase 4）。C-04 の「オフライン」は、同期の通信エラーか navigator.onLine が false のとき。繰り返しの予定の編集は、書く画面の保存のとき・詳細の項目の保存のときに C-04 で範囲を選ぶ。29〜31 日の毎月は「月末にしますか？」と聞く | rrule は回が 1 つも出ない規則だと 9999 年まで空回りする（毎日なら 290 万回）。家族の端末とサーバーで同じ展開をし、分割と差分で前の回を消さないため | 例外行に自分の version で If-Match（親の変更と食い違いに気づけない）／RRULE を何でも受け付ける |
 
 ## 25. 将来の拡張（今回は作らない）
 iPhone のカレンダーから購読できる ICS フィード（Tailscale 接続時のみ有効。`feed_tokens` に本人用のスコープを足せば、連携キーの仕組みをそのまま使える）、いえボードに祝日・留守（複数日の busy の終日予定）を出す（フィードにはもう入っている。いえボード側の作業）、Google カレンダーからの取り込み、写真の添付、六曜、移動時間、インターネット公開時のパスキー認証。
