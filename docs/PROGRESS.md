@@ -1,5 +1,5 @@
 # 進み具合
-今: 総点検 / 次にやること: E2E・Docker で確かめる → コミット → docs/security-review.md に修正コミットを書く → audit → 最終確認（RUNBOOK の最終確認のコマンドと最終報告）
+今: 最終確認 / 次にやること: RUNBOOK の最終確認のコマンド（pnpm install --frozen-lockfile・pnpm check・pnpm build・pnpm test:e2e・docker compose build・up -d --wait・exec app node dist/cli.js feed-token list・down）→ 受け入れ基準の見直し → 最終報告
 
 ## ステップ
 | ステップ | 状態（未着手・作業中・完了） | タグ | メモ |
@@ -12,7 +12,7 @@
 | Phase 4 通知 | 完了 | phase-4 | レビューの指摘（止めた端末の再購読、まとめ待ちの件名の漏れ、pnpm dev のログアウト、renotify、終日⇔時刻ありの通知 ほか）を直し、修正もレビューして直した（§24 D36） |
 | Phase 5 一言入力 | 完了 | phase-5 | 退避した作業を戻し、Anthropic の呼び出しを公式 SDK にした。レビューの 21 件（high 1・medium 11・low 9）を直した（§24 D37） |
 | Phase 7 仕上げ | 完了 | phase-7 | 空き時間・検索・書き出し・バックアップと掃除・同期と静的の gzip・これからの一覧の範囲・ビルドの検査・性能・security-map。レビューの 16 件を直した（§24 D38） |
-| 総点検 | 作業中 | audit | 5 つの観点（本人確認・CSRF と XSS と SW・非公開・フィード・入力と秘密とコンテナ）で攻撃の経路を洗い出し、反証できなかった 18 件（高 2・中 5・低 11）を再現テストを書いてから直した（docs/security-review.md、§24 D39） |
+| 総点検 | 完了 | audit | 5 つの観点（本人確認・CSRF と XSS と SW・非公開・フィード・入力と秘密とコンテナ）で攻撃の経路を洗い出し、反証できなかった 18 件（高 2・中 5・低 11）を再現テストを書いてから直した（docs/security-review.md、§24 D39） |
 | 最終確認 | 未着手 | — | |
 
 ## 受け入れ基準
@@ -120,6 +120,13 @@
 | Phase 7 | 依存の監査 | `pnpm audit --prod`（0 件）、`pnpm audit`（drizzle-kit の中の esbuild の moderate 1 件。開発用の道具でバンドルに入らない） | OK（既知の問題に記録） |
 | Phase 7 | レビューの指摘（§24 D38 (8)〜(11)） | web phase7.test.ts（検索の今日の境目・回ごとの絞り込み・他人の非公開・全員の予定、メモのリンク、これからの一覧の範囲）、server maintenance.test.ts（失敗したバックアップの書きかけ・ログの項目）、static.test.ts（gzip）、E2E phase7.spec.ts（今日に戻る・位置が飛ばない・メモのリンク）、`pnpm build` の check-dist（初回表示の JS 197KB） | OK |
 | Phase 7 | `pnpm check`・`pnpm build`・`pnpm test:e2e`・`docker compose build`・`up -d --wait` | `pnpm check`（Vitest 603 件）、`pnpm build`（check-dist: 初回表示の JS 198KB）、`pnpm test:e2e`（56 件）、`docker compose build`（Docker の中でも check-dist）・`up -d --wait`・`exec app node dist/cli.js feed-token list`・`down`、Docker の中でバックアップと掃除が動く（/data/backups/ito-20260928.db、uid 10001） | OK（すべて EXIT=0） |
+| 総点検 | 観点ごとの洗い出し（本人確認・CSRF・非公開・フィードと連携キー・XSS・SW・入力・秘密情報・コンテナ・依存） | 書き換えなしのサブエージェントが洗い出し、指摘ごとに別のエージェントが反証を試みる → docs/security-review.md（ID・深刻度・経路・再現テスト・修正コミット・残るリスク） | OK（反証できなかった 18 件（高 2・中 5・低 11）をすべて直した。却下 5 件。未検証は A4 の通信の長さの測定だけ） |
+| 総点検 | 疑わしい点ごとに失敗する再現テストを書いてから直す | server audit.test.ts（A1〜A11・A6・B3・B5）、audit-routes.test.ts、core recurrence-cost.test.ts（B1）・ids-text.test.ts（A6・B5）・notify.test.ts（B4）、server notify.test.ts（B2・B4）・perf.test.ts（B1）・architecture.test.ts（A12・B6）、web phase7.test.ts（A5）・phase4.test.ts（B4）、E2E phase2.spec.ts（A5） | OK |
+| 総点検 | CSRF をルートの一覧から機械的に確かめる | server audit-routes.test.ts（状態を変える全ルート × 6 通りの壊し方で 403 csrf、GET の /api も 4 通りで 403、/api の外は GET /healthz だけ、ID ヘッダなしは 401、フィードは ID ヘッダだけでは 401） | OK |
+| 総点検 | Tailscale のポリシーを手で確かめる手順を README に書く | README「設置したあとの確かめ方（アクセス制御）」 | OK（確かめるのは持ち主。要確認） |
+| 総点検 | 依存の監査 | `pnpm audit --prod`（EXIT=0、0 件）、`pnpm audit`（EXIT=0。受け入れた drizzle-kit の esbuild の 1 件だけを外す） | OK |
+| 総点検 | コンテナ（非 root・読み取り専用・cap_drop・app.env） | `docker compose build`・`up -d --wait`・`exec app id`（uid=10001）・/app に書けない・CapEff 0・NoNewPrivs 1・待ち受けは 127.0.0.1:8787 だけ・イメージに .env なし・`feed-token list`・`feed-check-inner.mjs`（401/200/401）・`down` | OK（すべて EXIT=0） |
+| 総点検 | `pnpm check`・`pnpm build`・`pnpm test:e2e` | `pnpm check`（Vitest 643 件）、`pnpm build`（check-dist: 初回表示の JS 199KB）、`pnpm test:e2e`（56 件中 55 件。「§19 これからの一覧…long task」が 1 回だけ 52ms で落ち、その 1 件を 3 回繰り返して 3 回とも通った。最終確認でもう一度全部を回す） | OK（既知の問題に記録） |
 | Phase 6 | `pnpm check`・`pnpm test:e2e`・`pnpm build`・`docker compose build` | `pnpm check`（261 件）、`pnpm test:e2e`（39 件）、`pnpm build`、`docker compose build` | OK（すべて EXIT=0） |
 
 ## 決めたこと（SPEC §24 に書いたもの）
@@ -170,6 +177,9 @@
 
 ## 既知の問題
 - `pnpm audit` で drizzle-kit（マイグレーションを作る開発用の道具）の中の esbuild（<=0.24.2 の開発サーバーの問題。GHSA-67mh-4wv8-2f99）が moderate 1 件。開発用の道具で、バンドル・Docker のイメージに入らず、esbuild を開発サーバーとして動かさないので受け入れる（drizzle-kit の更新で解消する）
+- E2E の「§19 これからの一覧…50ms を超える long task が出ず…」は、総点検の途中の 1 回だけ 52ms の long task で落ちた（そのほかの回と、その 1 件だけを 3 回繰り返したときは通る。展開は総点検の B1 の変更で素の rrule より速い＝同じ条件で 60 回の展開が 114ms 対 300ms）。手元の PC の負荷による揺れと見ている
+- 初回表示の JS は gzip で 199KB（§19 の上限 200KB に近い。総点検で core に展開の検査を足したため）。これ以上足すときは、開いたときに読む画面にさらに分ける
+- テストの購読の送り先を、プッシュサービスの形（https://fcm.googleapis.com/fcm/send/…・https://web.push.apple.com/…）に変えた（総点検 B4 で送り先をプッシュサービスに限ったため。確かめる中身は同じ）
 - テストを直したもの（総点検）: server middleware.test.ts の「GET には CSRF の検査を掛けない（クロスサイトの Origin・Sec-Fetch-Site でも 200）」「ホーム画面・通知から開くとき（Sec-Fetch-Site: none、Origin なし）の GET も通る」を、§24 D39 の新しい決まり（/api/* の GET は X-Ito-Client と same-origin が要る・ページの遷移には掛けない）を確かめるテストに書き換えた（前の決まりそのものが A3・A4 の穴だった）。export.test.ts の「X-Ito-Client がない」要求は、テストの send() が GET にも X-Ito-Client を付けるようにしたので、明示して外した（確かめる中身は同じ）。E2E phase2.spec.ts で許すコンソールエラーを、/api/export だけから /api と /%61pi への遷移の 4xx に広げた（A5 で遷移の形を足したため。URL で絞っている）
 - テストを直したもの（Phase 7）: server static.test.ts の /api/export へのページ遷移を 404 から 403 に（経路がなかったときの状態コードを期待していた。確かめたいのは index.html にならないことで、それは変えていない）
 - E2E のコンソールエラー 0 件の確認では、ネットワークを切るテスト（オフライン・API 遮断・競合・ログアウトのあとのオフライン）と /api/export への遷移のテストに限り、Chromium が自分で出す「Failed to load resource」のうち、意図して失敗させた /api/ への要求のもの（net::ERR_INTERNET_DISCONNECTED / net::ERR_FAILED / status of 409 / /api/*・/%61pi/* へのページ遷移の 4xx）だけを許している（URL で絞る。アプリシェル・アイコンなどの失敗やアプリのエラーは許さない。e2e/fixtures.ts の allowedConsoleErrors）
