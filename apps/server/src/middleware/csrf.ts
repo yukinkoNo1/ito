@@ -67,7 +67,14 @@ export function csrf(appOrigin: string): MiddlewareHandler {
  */
 export function readBodyFirst(): MiddlewareHandler {
   return async (c, next) => {
-    if (isStateChanging(c.req.method)) await c.req.arrayBuffer();
+    if (isStateChanging(c.req.method)) {
+      try {
+        await c.req.arrayBuffer();
+      } catch {
+        // 送る途中で切れた（通信が途切れたスマホなど）。500 と ERROR のログにしない（総点検のレビュー C7）
+        throw new ApiError(400, 'body_incomplete');
+      }
+    }
     return next();
   };
 }

@@ -76,9 +76,14 @@ export function useMe(): MeDTO | undefined {
 
 export function useMembers(): MemberDTO[] {
   const { db } = useData();
-  const members = useLiveQuery(() => db.members.toArray(), [db]) ?? [];
-  return [...members].sort((a, b) =>
-    a.createdAt < b.createdAt ? -1 : a.createdAt > b.createdAt ? 1 : a.id < b.id ? -1 : 1,
+  const members = useLiveQuery(() => db.members.toArray(), [db]);
+  // 並べた配列は、家族の一覧が変わったときだけ作り直す（描き直しのたびに別の配列にしない。§24 D40）
+  return useMemo(
+    () =>
+      [...(members ?? [])].sort((a, b) =>
+        a.createdAt < b.createdAt ? -1 : a.createdAt > b.createdAt ? 1 : a.id < b.id ? -1 : 1,
+      ),
+    [members],
   );
 }
 

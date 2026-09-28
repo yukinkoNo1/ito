@@ -36,6 +36,24 @@ html[data-theme="dark"] {
   font-size: 0.8125rem;
 }
 
+/*
+ * S-01: 日ごとにレイアウトと描画を閉じ込める（§19。§24 D40）。端で日を足したり削ったりして日の位置がずれても、
+ * ほかの日の中身をレイアウト・描画し直さない。画面の外の日も描いておく（高さの見込みを使わないので、
+ * スクロールアンカーのない Safari でも、移動や上へのスクロールで表示が跳ねない）
+ */
+.date-section {
+  contain: layout paint style;
+}
+
+/* 描画の閉じ込めは日の区切りの外を描かないので、端の行のフォーカスの輪と現在時刻線の丸が欠けないように */
+.date-section .ui-button:focus-visible {
+  outline-offset: -0.125rem;
+}
+
+.date-section > .now-line:last-child {
+  margin-bottom: 0.3125rem;
+}
+
 /* S-01: 行と現在時刻線 */
 .flow-row {
   position: relative;

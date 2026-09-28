@@ -32,6 +32,18 @@ export function registerFeedRoutes(app: App, deps: AppDeps): void {
     authFailures = 0;
     lastAuthFailLog = now;
   };
+  // 出していない件数が残っていれば、次に出せる時刻にタイマーを掛ける（出したあとも残っていれば掛け直す。
+  // 要求のときに出して時刻が進んでも、置いていかれない。総点検のレビュー C5）
+  const scheduleFlush = () => {
+    if (authFailures === 0 || flushTimer !== null) return;
+    const wait = Math.max(1000, lastAuthFailLog + AUTH_FAIL_LOG_INTERVAL_MS - clock.now());
+    flushTimer = setTimeout(() => {
+      flushTimer = null;
+      flushAuthFailures();
+      scheduleFlush();
+    }, wait);
+    flushTimer.unref?.();
+  };
 
   const guard: MiddlewareHandler<AppEnv> = async (c, next) => {
     flushAuthFailures();
@@ -45,13 +57,7 @@ export function registerFeedRoutes(app: App, deps: AppDeps): void {
       // 失敗のログは 1 分に 1 回までにまとめる（件数だけ。キーは出さない）
       authFailures++;
       flushAuthFailures();
-      if (authFailures > 0 && flushTimer === null) {
-        flushTimer = setTimeout(() => {
-          flushTimer = null;
-          flushAuthFailures();
-        }, AUTH_FAIL_LOG_INTERVAL_MS);
-        flushTimer.unref?.();
-      }
+      scheduleFlush();
       throw new ApiError(401, 'feed_unauthorized', undefined, undefined, {
         'WWW-Authenticate': 'Bearer',
       });

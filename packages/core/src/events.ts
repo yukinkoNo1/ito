@@ -267,7 +267,8 @@ function finalize(
           });
       }
       // 回が出ない・まれにしか出ない規則は、展開のたびに rrule が長く空回りするので拒む（総点検 B1。§24 D39）
-      if (first) {
+      // 開始の日付が範囲の外なら、上で日付のエラーにしている（暦の計算をしない。総点検のレビュー C3）
+      if (first && first >= MIN_DATE && first <= MAX_DATE) {
         const time = startAt === null ? '00:00' : toJstParts(startAt).time;
         const dense = ruleDensityError(rule, { date: first, time });
         if (dense) errors.push({ field: 'rrule', message: dense });

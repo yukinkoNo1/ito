@@ -1,5 +1,5 @@
 import { addDays, type DateISO } from '@ito/core';
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router';
 import { useEvents, useMe, useMeta } from '../../app/data-context';
 import { useSyncVM } from '../../app/hooks';
@@ -22,12 +22,16 @@ import {
   UNKNOWN_KEY,
 } from '../../pwa/push';
 import UpcomingScreen from '../../ui/screens/UpcomingScreen';
+import type { FlowItem, MemberVM } from '../../ui/types';
 import {
   buildFlowScreen,
+  countFlowFresh,
   extendFlowRange,
   FLOW_FUTURE_LIMIT,
   FLOW_PAST_LIMIT,
   FLOW_WINDOW_DAYS,
+  reuseSame,
+  sameData,
   shiftWeek,
 } from '../../viewmodels/screens';
 
@@ -75,9 +79,17 @@ export function FlowContainer() {
   const from = range?.from ?? (today ? addDays(today, -1) : null);
   const to = range?.to ?? (today ? addDays(today, FLOW_WINDOW_DAYS) : null);
 
+  // 「新しい予定 n件」は範囲と別に数える（範囲を足すたびに数え直さない。§24 D40）
+  const freshCount = useMemo(
+    () => (ctx && events ? countFlowFresh(events, ctx, filter) : 0),
+    [ctx, events, filter],
+  );
+
+  // 前に描いた行（中身が同じ行は同じオブジェクトを渡し、UpcomingScreen の memo で描き直しを省く。§19。§24 D40）
+  const previous = useRef<{ items: FlowItem[]; members: MemberVM[] } | null>(null);
   const data = useMemo(() => {
     if (!ctx || !events || !selectedDate || !from || !to) return null;
-    return buildFlowScreen({
+    const built = buildFlowScreen({
       events,
       ctx,
       filter,
@@ -94,9 +106,15 @@ export function FlowContainer() {
             : null,
       // 今日から離れた（移動した・今日の日が描く範囲から外れた）ら「今日に戻る」
       showBackToToday: selectedDate !== ctx.today || ctx.today < from || ctx.today >= to,
+      freshCount,
     });
+    const prev = previous.current;
+    const items = reuseSame(prev?.items ?? null, built.items);
+    const members = prev && sameData(prev.members, built.members) ? prev.members : built.members;
+    previous.current = { items, members };
+    return { ...built, items, members };
     // sync は一覧の組み立てに使わない（60 秒ごとの同期で一覧を作り直さない）
-  }, [ctx, events, filter, from, to, selectedDate, weekStart, unread, notice]);
+  }, [ctx, events, filter, from, to, selectedDate, weekStart, unread, notice, freshCount]);
 
   // 範囲を置き換えて描き直したあとで、その行へ合わせる
   useEffect(() => {

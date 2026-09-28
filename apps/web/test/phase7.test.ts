@@ -4,9 +4,18 @@ import type { Fetcher } from '../src/data/api';
 import { downloadExport, fileNameOf } from '../src/pwa/export';
 import { isDeniedNavigation } from '../src/pwa/nav-denylist';
 import { splitLinks } from '../src/ui/labels';
+import { MOCK_TODAY, mockContext, mockEvents } from '../src/ui/mock';
 import { buildFreeTimeVM } from '../src/viewmodels/free';
 import type { VmContext } from '../src/viewmodels/occurrence';
-import { extendFlowRange, MAX_FLOW_DAYS } from '../src/viewmodels/screens';
+import {
+  buildFlowScreen,
+  countFlowFresh,
+  extendFlowRange,
+  FLOW_WINDOW_DAYS,
+  MAX_FLOW_DAYS,
+  reuseSame,
+  sameData,
+} from '../src/viewmodels/screens';
 import { rememberQuery, searchOccurrences, searchTerms } from '../src/viewmodels/search';
 import { ev, M, members } from './fixtures';
 
@@ -358,5 +367,83 @@ describe('SW のページ遷移の除外（§17・§18 T3。総点検 A5）', ()
         false,
       ]);
     }
+  });
+});
+
+describe('これからの一覧の描き直しを小さくする（§19。§24 D40）', () => {
+  const flowAt = (
+    from: string,
+    to: string,
+    extra: Partial<Parameters<typeof buildFlowScreen>[0]> = {},
+  ) =>
+    buildFlowScreen({
+      events: mockEvents(),
+      ctx: mockContext(),
+      filter: null,
+      from,
+      to,
+      selectedDate: MOCK_TODAY,
+      weekStart: 0,
+      unreadActivity: 0,
+      notice: null,
+      showBackToToday: false,
+      ...extra,
+    });
+
+  it('同じ入力で作り直した行は中身が同じ（使い回せる）。範囲を足したときは重なる日をそのまま使う', () => {
+    const from = addDays(MOCK_TODAY, -1);
+    const first = flowAt(from, addDays(MOCK_TODAY, FLOW_WINDOW_DAYS));
+    const again = flowAt(from, addDays(MOCK_TODAY, FLOW_WINDOW_DAYS));
+    const reused = reuseSame(first.items, again.items);
+    expect(reused.every((item, i) => item === first.items[i])).toBe(true);
+    // 4 週足した一覧: 前からある日は前のオブジェクト、新しい日だけ新しい
+    const longer = flowAt(from, addDays(MOCK_TODAY, FLOW_WINDOW_DAYS + 28));
+    const merged = reuseSame(first.items, longer.items);
+    const old = new Set(first.items);
+    const kept = merged.filter((item) => old.has(item));
+    expect(kept.length).toBeGreaterThan(0);
+    for (const item of merged) {
+      const before = first.items.find((x) => x.key === item.key);
+      if (before && sameData(before, item)) expect(item).toBe(before);
+    }
+    expect(merged.map((i) => i.key)).toEqual(longer.items.map((i) => i.key));
+  });
+
+  it('中身が変わった行は新しいオブジェクト（古い行を出し続けない）', () => {
+    const from = addDays(MOCK_TODAY, -1);
+    const to = addDays(MOCK_TODAY, FLOW_WINDOW_DAYS);
+    const first = flowAt(from, to);
+    const renamed = mockEvents().map((e, i) =>
+      i === 0 ? { ...e, title: `${e.title}（変更）` } : e,
+    );
+    const next = flowAt(from, to, { events: renamed });
+    const merged = reuseSame(first.items, next.items);
+    const changed = merged.filter((item, i) => item !== first.items[i]);
+    expect(changed.length).toBeGreaterThan(0);
+    for (const item of changed) expect(JSON.stringify(item)).toContain('（変更）');
+    expect(sameData({ a: [1, { b: 2 }] }, { a: [1, { b: 2 }] })).toBe(true);
+    expect(sameData({ a: [1, { b: 2 }] }, { a: [1, { b: 3 }] })).toBe(false);
+    expect(sameData({ a: 1 }, { a: 1, b: undefined })).toBe(false);
+    expect(sameData([1, 2], { 0: 1, 1: 2 })).toBe(false);
+  });
+
+  it('「新しい予定 n件」は範囲と別に数えても、描く範囲に関係なく同じ数', () => {
+    const fresh = mockContext({ freshSince: 0 });
+    const events = mockEvents();
+    const expected = countFlowFresh(events, fresh, null);
+    expect(expected).toBeGreaterThan(0);
+    const near = flowAt(addDays(MOCK_TODAY, -1), addDays(MOCK_TODAY, FLOW_WINDOW_DAYS), {
+      ctx: fresh,
+    });
+    const far = flowAt(addDays(MOCK_TODAY, 200), addDays(MOCK_TODAY, 340), { ctx: fresh });
+    const given = flowAt(addDays(MOCK_TODAY, 200), addDays(MOCK_TODAY, 340), {
+      ctx: fresh,
+      freshCount: expected,
+    });
+    expect([near.freshCount, far.freshCount, given.freshCount]).toEqual([
+      expected,
+      expected,
+      expected,
+    ]);
   });
 });

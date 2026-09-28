@@ -31,7 +31,9 @@ export function upsertSubscription(
     .where(eq(pushSubscriptions.endpoint, input.endpoint))
     .get();
   const label = input.label ?? existing?.label ?? 'この端末';
-  if (existing?.memberId !== me.id && countSubscriptions(db, me.id) >= MAX_DEVICES_PER_MEMBER) {
+  // 数えるのは新しい endpoint だけ。ほかの家族の端末を引き継ぐとき（同じ endpoint）は行が増えないので数えない
+  // （上限で断ると、前の持ち主の通知がその端末に届き続ける。総点検のレビュー C8）
+  if (!existing && countSubscriptions(db, me.id) >= MAX_DEVICES_PER_MEMBER) {
     throw new ApiError(
       409,
       'device_limit',

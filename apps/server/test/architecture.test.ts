@@ -77,4 +77,14 @@ describe('リポジトリの決まり', () => {
     expect(ignored).toEqual(['GHSA-67mh-4wv8-2f99']);
     expect(yaml).toMatch(/^auditConfig:\n\s+ignoreGhsas:/m);
   });
+
+  it('設置後の確認の手順と開発の確認のスクリプトは、/api の GET に X-Ito-Client を付ける（§14 の 4.。総点検のレビュー C6）', () => {
+    const readme = readFileSync(path.join(repo, 'README.md'), 'utf8');
+    const line = readme.split('\n').find((l) => l.includes('/api/me') && l.includes('tag:ieboard'));
+    expect(line).toBeDefined();
+    expect(line).toContain('X-Ito-Client');
+    expect(line).toContain('401');
+    const script = readFileSync(path.join(repo, 'scripts/check-dev.mjs'), 'utf8');
+    expect(script).toMatch(/\/api\/me['"`],\s*\{[^}]*X-Ito-Client/);
+  });
 });

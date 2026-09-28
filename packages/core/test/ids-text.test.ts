@@ -3,8 +3,10 @@ import { isUuid, uuidv7 } from '../src/ids';
 import { memberAliasesSchema, memberMarkSchema, memberNameSchema } from '../src/members';
 import { eventCreateSchema } from '../src/schemas';
 import {
+  fitGraphemes,
   graphemeLength,
   hasHiddenCharacters,
+  nameKey,
   normalizeText,
   removeHiddenCharacters,
   truncateGraphemes,
@@ -133,5 +135,28 @@ describe('結合文字を大量に付けた「1 文字」（総点検 B5）', ()
     expect(withinGraphemes('あ'.repeat(100), 100)).toBe(true);
     expect(withinGraphemes('あ'.repeat(101), 100)).toBe(false);
     expect(withinGraphemes(`が${c(0x3099)}`, 1)).toBe(true);
+  });
+});
+
+describe('名前を比べる鍵と、長さに収める（総点検のレビュー C9・C10）', () => {
+  const c = (...cps: number[]) => String.fromCodePoint(...cps);
+
+  it('nameKey は異体字セレクタ・ZWJ・タグなど見た目を変えない文字を除く', () => {
+    expect(nameKey(`お母${c(0xfe00)}さん`)).toBe(nameKey('お母さん'));
+    expect(nameKey(`お母${c(0xe0100)}さん `)).toBe('お母さん');
+    expect(nameKey(`ママ${c(0x1f600, 0xfe0f)}`)).toBe(nameKey(`ママ${c(0x1f600)}`));
+    expect(nameKey(`パパ${c(0x1f3f4, 0xe0078, 0xe007f)}`)).toBe(nameKey(`パパ${c(0x1f3f4)}`));
+    expect(nameKey('お母さん')).not.toBe(nameKey('お毋さん'));
+  });
+
+  it('fitGraphemes は長すぎる 1 文字を除き、見た目の文字数と全体の長さの上限に収める', () => {
+    const acute = (n: number) => c(0x301).repeat(n);
+    const family = c(0x1f468, 0x200d, 0x1f469, 0x200d, 0x1f467, 0x200d, 0x1f466);
+    expect(fitGraphemes(`ゆ${acute(2000)}き`, 20)).toBe('き');
+    expect(fitGraphemes('あ'.repeat(30), 20)).toBe('あ'.repeat(20));
+    const fitted = fitGraphemes(family.repeat(8), 20);
+    expect(withinGraphemes(fitted, 20)).toBe(true);
+    expect(fitted.length).toBeLessThanOrEqual(80);
+    expect(fitGraphemes(acute(50), 1)).toBe('');
   });
 });

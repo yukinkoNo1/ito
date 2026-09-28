@@ -191,4 +191,63 @@ describe('性能（§19）', () => {
     dueReminders(ctx.database.db, ctx.clock.now());
     expect(performance.now() - t1).toBeLessThan(200);
   });
+
+  it('COUNT のうるう日の繰り返し 60 件・毎月の繰り返し 600 行でも、表示用フィードと通知の計算は 200ms 未満（総点検のレビュー C1・C2）', async () => {
+    for (let mm = 0; mm < 60; mm++) {
+      const { res } = await createEvent(ctx, 'yuki', {
+        title: `うるう日 ${mm}`,
+        allDay: false,
+        startAt: `2028-02-29T07:${String(mm).padStart(2, '0')}:00+09:00`,
+        rrule: 'FREQ=MONTHLY;BYMONTH=2;BYMONTHDAY=29;COUNT=1000',
+        memberIds: [IDS.yuki],
+      });
+      expect(res.status).toBe(201);
+    }
+    const db = ctx.database.db;
+    for (let i = 0; i < 600; i++) {
+      const at = fromJst(addDays('2026-01-01', i), '09:00');
+      insertRecord(db, {
+        id: uuidv7(NOW + 10_000 + i),
+        version: 1,
+        title: `毎月 ${i}`,
+        note: null,
+        location: null,
+        allDay: false,
+        startAt: at,
+        endAt: null,
+        startDate: null,
+        endDate: null,
+        rrule: i % 2 === 0 ? 'FREQ=MONTHLY' : 'FREQ=YEARLY;COUNT=1000',
+        exdates: [],
+        parentId: null,
+        recurrenceId: null,
+        memberIds: [IDS.mama],
+        forEveryone: false,
+        busy: true,
+        visibility: 'family',
+        ownerId: IDS.mama,
+        createdBy: IDS.mama,
+        updatedBy: IDS.mama,
+        deletedBy: null,
+        createdAt: NOW - 1000,
+        updatedAt: NOW - 1000,
+        deletedAt: null,
+      });
+    }
+    const { token } = createFeedToken(db, ctx.clock, 'いえボード');
+    const get = () =>
+      send(ctx, 'GET', '/api/feed/display?days=3', {
+        csrf: false,
+        headers: { authorization: `Bearer ${token}` },
+      });
+    for (let pass = 0; pass < 3; pass++) {
+      const t0 = performance.now();
+      expect((await get()).status).toBe(200);
+      // 直す前は 1 回目がおよそ 5.4 秒（COUNT の全体を歩く）、2 回目以降も 1.6 秒（検査を毎回やり直す）
+      expect([pass, performance.now() - t0 < 200]).toEqual([pass, true]);
+    }
+    const t1 = performance.now();
+    dueReminders(db, ctx.clock.now());
+    expect(performance.now() - t1).toBeLessThan(200);
+  });
 });

@@ -9,12 +9,20 @@ import {
   weekdayOf,
 } from '@ito/core/jst';
 import { CalendarDays, ChevronLeft, ChevronRight, Search, X } from 'lucide-react';
-import { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import {
+  type CSSProperties,
+  memo,
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+} from 'react';
 import { BottomSlot } from '../primitives/AppShell';
 import { Button } from '../primitives/Controls';
 import ScheduleEventRow from '../primitives/ScheduleEventRow';
 import ThreadRail from '../primitives/ThreadRail';
-import type { DayVM, FlowScreenProps, MemberVM, MonthCellVM } from '../types';
+import type { DayVM, FlowItem, FlowScreenProps, MemberVM, MonthCellVM } from '../types';
 
 /** 上下の端からこの距離（px）まで来たら、続きを読む */
 const EDGE_PX = 200;
@@ -198,6 +206,81 @@ function hasAnyOccurrence(items: FlowScreenProps['items']): boolean {
   );
 }
 
+/**
+ * 一覧の 1 行（日・月の区切り・予定のない日）。中身が同じ行は描き直さない（範囲を足したときに変わらない日を
+ * 飛ばす。FlowContainer が中身の同じ行に同じオブジェクトを渡す。§19。§24 D40）
+ */
+const FlowItemView = memo(function FlowItemView({
+  item,
+  members,
+  onComposeOnDate,
+  onOpenOccurrence,
+}: {
+  item: FlowItem;
+  members: MemberVM[];
+  onComposeOnDate: (date: DateISO) => void;
+  onOpenOccurrence: (key: string) => void;
+}) {
+  if (item.kind === 'month') {
+    return (
+      <div className="month-divider" data-item-key={item.key}>
+        {item.label}
+      </div>
+    );
+  }
+  if (item.kind === 'gap') {
+    return (
+      <div className="timeline-row no-events-row" data-item-key={item.key}>
+        <ThreadRail members={members} />
+        <span>{item.label}</span>
+      </div>
+    );
+  }
+  const { day } = item;
+  const continuing = day.ongoingMemberIds;
+  const rows = [
+    ...day.allDay.map((a) => ({ occ: a.occ, past: false })),
+    ...day.timed.map((t) => ({ occ: t.occ, past: t.past })),
+  ];
+  const nowAt = day.nowIndex === null ? null : day.allDay.length + day.nowIndex;
+  // 画面の外の日は描かない（content-visibility。§19。§24 D40）。描く前の高さの見込みは行の数から
+  const style: CSSProperties & { '--flow-rows': string } = {
+    '--flow-rows': String(Math.max(1, rows.length)),
+  };
+  return (
+    <div
+      className="date-section"
+      data-date={day.date}
+      data-item-key={item.key}
+      id={`date-${day.date}`}
+      style={style}
+    >
+      <DayHeader day={day} members={members} onAdd={() => onComposeOnDate(day.date)} />
+      {rows.map((row, index) => (
+        <div className="flow-row" key={row.occ.key}>
+          {nowAt === index && <div className="now-line" role="presentation" />}
+          <ScheduleEventRow
+            continuingIds={continuing}
+            members={members}
+            occ={row.occ}
+            onOpen={() => onOpenOccurrence(row.occ.key)}
+            past={row.past}
+          />
+        </div>
+      ))}
+      {nowAt !== null && nowAt === rows.length && rows.length > 0 && (
+        <div className="now-line" role="presentation" />
+      )}
+      {rows.length === 0 && (
+        <div className="timeline-row no-events-row">
+          <ThreadRail continuingIds={continuing} members={members} />
+          <span>予定なし</span>
+        </div>
+      )}
+    </div>
+  );
+});
+
 /** S-01 これから */
 export default function UpcomingScreen(props: FlowScreenProps) {
   const {
@@ -218,6 +301,13 @@ export default function UpcomingScreen(props: FlowScreenProps) {
   } = props;
   const [datePickerOpen, setDatePickerOpen] = useState(false);
   const scrollRef = useRef<HTMLElement | null>(null);
+  // 行に渡す呼び出しは描き直しても同じものにする（行の memo を効かせる）
+  const composeRef = useRef(props.onComposeOnDate);
+  const openRef = useRef(props.onOpenOccurrence);
+  composeRef.current = props.onComposeOnDate;
+  openRef.current = props.onOpenOccurrence;
+  const composeOnDate = useCallback((date: DateISO) => composeRef.current(date), []);
+  const openOccurrence = useCallback((key: string) => openRef.current(key), []);
   const me = members.find((m) => m.isMe);
   // 見出しは今日（'2026年 9月27日 日曜日'）。年も今日から（移動した日の年ではない）
   const [yearPart, datePart, weekdayPart] = headerDateLabel.split(' ');
@@ -303,16 +393,22 @@ export default function UpcomingScreen(props: FlowScreenProps) {
     return () => observer.disconnect();
   }, [today, items]);
 
-  // 足した・削ったあとは、見ていた行を同じ位置に戻す
+  // 足した・削ったあとは、見ていた行を同じ位置に戻す。位置を測るのは次の描画の直前（requestAnimationFrame）
+  // にする: 描画より前に合わせるのは同じで、描き直し（React）とレイアウトを 1 つのタスクにまとめない
+  // （long task にしない。§19。§24 D40）。合わせるまでは次の追加読み込みをしない（pendingAnchor が残る）
   useLayoutEffect(() => {
     const root = scrollRef.current;
     const anchor = pendingAnchor.current;
     if (!root || anchor === null || items.length === 0) return;
-    pendingAnchor.current = null;
-    const el = root.querySelector<HTMLElement>(`[data-item-key="${CSS.escape(anchor.key)}"]`);
-    if (!el) return;
-    root.scrollTop +=
-      el.getBoundingClientRect().top - root.getBoundingClientRect().top - anchor.top;
+    const frame = requestAnimationFrame(() => {
+      if (pendingAnchor.current !== anchor) return;
+      pendingAnchor.current = null;
+      const el = root.querySelector<HTMLElement>(`[data-item-key="${CSS.escape(anchor.key)}"]`);
+      if (!el) return;
+      root.scrollTop +=
+        el.getBoundingClientRect().top - root.getBoundingClientRect().top - anchor.top;
+    });
+    return () => cancelAnimationFrame(frame);
   }, [items]);
 
   const filters: { id: string; label: string; value: string[] | null }[] = [
@@ -420,66 +516,15 @@ export default function UpcomingScreen(props: FlowScreenProps) {
             </div>
           </div>
         ) : (
-          items.map((item) => {
-            if (item.kind === 'month') {
-              return (
-                <div className="month-divider" data-item-key={item.key} key={item.key}>
-                  {item.label}
-                </div>
-              );
-            }
-            if (item.kind === 'gap') {
-              return (
-                <div className="timeline-row no-events-row" data-item-key={item.key} key={item.key}>
-                  <ThreadRail members={members} />
-                  <span>{item.label}</span>
-                </div>
-              );
-            }
-            const { day } = item;
-            const continuing = day.ongoingMemberIds;
-            const rows = [
-              ...day.allDay.map((a) => ({ occ: a.occ, past: false })),
-              ...day.timed.map((t) => ({ occ: t.occ, past: t.past })),
-            ];
-            const nowAt = day.nowIndex === null ? null : day.allDay.length + day.nowIndex;
-            return (
-              <div
-                className="date-section"
-                data-date={day.date}
-                data-item-key={item.key}
-                id={`date-${day.date}`}
-                key={item.key}
-              >
-                <DayHeader
-                  day={day}
-                  members={members}
-                  onAdd={() => props.onComposeOnDate(day.date)}
-                />
-                {rows.map((row, index) => (
-                  <div className="flow-row" key={row.occ.key}>
-                    {nowAt === index && <div className="now-line" role="presentation" />}
-                    <ScheduleEventRow
-                      continuingIds={continuing}
-                      members={members}
-                      occ={row.occ}
-                      onOpen={() => props.onOpenOccurrence(row.occ.key)}
-                      past={row.past}
-                    />
-                  </div>
-                ))}
-                {nowAt !== null && nowAt === rows.length && rows.length > 0 && (
-                  <div className="now-line" role="presentation" />
-                )}
-                {rows.length === 0 && (
-                  <div className="timeline-row no-events-row">
-                    <ThreadRail continuingIds={continuing} members={members} />
-                    <span>予定なし</span>
-                  </div>
-                )}
-              </div>
-            );
-          })
+          items.map((item) => (
+            <FlowItemView
+              item={item}
+              key={item.key}
+              members={members}
+              onComposeOnDate={composeOnDate}
+              onOpenOccurrence={openOccurrence}
+            />
+          ))
         )}
         <div className="flow-sentinel" />
       </section>

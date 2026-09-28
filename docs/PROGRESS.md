@@ -126,7 +126,7 @@
 | 総点検 | Tailscale のポリシーを手で確かめる手順を README に書く | README「設置したあとの確かめ方（アクセス制御）」 | OK（確かめるのは持ち主。要確認） |
 | 総点検 | 依存の監査 | `pnpm audit --prod`（EXIT=0、0 件）、`pnpm audit`（EXIT=0。受け入れた drizzle-kit の esbuild の 1 件だけを外す） | OK |
 | 総点検 | コンテナ（非 root・読み取り専用・cap_drop・app.env） | `docker compose build`・`up -d --wait`・`exec app id`（uid=10001）・/app に書けない・CapEff 0・NoNewPrivs 1・待ち受けは 127.0.0.1:8787 だけ・イメージに .env なし・`feed-token list`・`feed-check-inner.mjs`（401/200/401）・`down` | OK（すべて EXIT=0） |
-| 総点検 | `pnpm check`・`pnpm build`・`pnpm test:e2e` | `pnpm check`（Vitest 643 件）、`pnpm build`（check-dist: 初回表示の JS 199KB）、`pnpm test:e2e`（56 件中 55 件。「§19 これからの一覧…long task」が 1 回だけ 52ms で落ち、その 1 件を 3 回繰り返して 3 回とも通った。最終確認でもう一度全部を回す） | OK（既知の問題に記録） |
+| 総点検 | `pnpm check`・`pnpm build`・`pnpm test:e2e` | `pnpm check`（Vitest 643 件）、`pnpm build`（check-dist: 初回表示の JS 199KB）、`pnpm test:e2e`（56 件中 55 件。「§19 これからの一覧…long task」が 52ms で落ちた。原因を調べて直した（§24 D40）あとは 56 件とも通る） | OK |
 | Phase 6 | `pnpm check`・`pnpm test:e2e`・`pnpm build`・`docker compose build` | `pnpm check`（261 件）、`pnpm test:e2e`（39 件）、`pnpm build`、`docker compose build` | OK（すべて EXIT=0） |
 
 ## 決めたこと（SPEC §24 に書いたもの）
@@ -180,7 +180,7 @@
 
 ## 既知の問題
 - `pnpm audit` で drizzle-kit（マイグレーションを作る開発用の道具）の中の esbuild（<=0.24.2 の開発サーバーの問題。GHSA-67mh-4wv8-2f99）が moderate 1 件。開発用の道具で、バンドル・Docker のイメージに入らず、esbuild を開発サーバーとして動かさないので受け入れる（drizzle-kit の更新で解消する）
-- E2E の「§19 これからの一覧…50ms を超える long task が出ず…」は、総点検の途中の 1 回だけ 52ms の long task で落ちた（そのほかの回と、その 1 件だけを 3 回繰り返したときは通る。展開は総点検の B1 の変更で素の rrule より速い＝同じ条件で 60 回の展開が 114ms 対 300ms）。手元の PC の負荷による揺れと見ている
+- （解決済み。§24 D40）E2E の「§19 これからの一覧…long task」が総点検の途中で 1 回 52ms で落ちた。Chrome のトレースで調べると、端で足すたびに 140 日分を組み立て直して描き直すタスク（39〜50ms）と、そのあとの描画のタスク（44〜52ms）が 50ms すれすれで、揺れではなく余裕がなかった（文脈と家族の一覧が描き直しのたびに新しいオブジェクトになり、関係のない描き直しでも一覧を組み立て直していたのも一因）。変わらない日を描き直さない・日ごとにレイアウトと描画を閉じ込める・位置の合わせ直しを次の描画の直前に移す、で直した。同じ測り方で最大 34.7ms、描画のタスクはなくなった。しきい値と測り方は変えていない
 - 初回表示の JS は gzip で 199KB（§19 の上限 200KB に近い。総点検で core に展開の検査を足したため）。これ以上足すときは、開いたときに読む画面にさらに分ける
 - テストの購読の送り先を、プッシュサービスの形（https://fcm.googleapis.com/fcm/send/…・https://web.push.apple.com/…）に変えた（総点検 B4 で送り先をプッシュサービスに限ったため。確かめる中身は同じ）
 - テストを直したもの（総点検）: server middleware.test.ts の「GET には CSRF の検査を掛けない（クロスサイトの Origin・Sec-Fetch-Site でも 200）」「ホーム画面・通知から開くとき（Sec-Fetch-Site: none、Origin なし）の GET も通る」を、§24 D39 の新しい決まり（/api/* の GET は X-Ito-Client と same-origin が要る・ページの遷移には掛けない）を確かめるテストに書き換えた（前の決まりそのものが A3・A4 の穴だった）。export.test.ts の「X-Ito-Client がない」要求は、テストの send() が GET にも X-Ito-Client を付けるようにしたので、明示して外した（確かめる中身は同じ）。E2E phase2.spec.ts で許すコンソールエラーを、/api/export だけから /api と /%61pi への遷移の 4xx に広げた（A5 で遷移の形を足したため。URL で絞っている）

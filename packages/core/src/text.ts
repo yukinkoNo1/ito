@@ -69,3 +69,28 @@ export function withinGraphemes(value: string, max: number): boolean {
   const g = graphemes(value);
   return g.length <= max && g.every((x) => x.length <= MAX_UNITS_PER_GRAPHEME);
 }
+
+/**
+ * 見た目で max 文字に収める。長すぎる 1 文字（結合文字を大量に付けたもの）は除き、全体の長さの上限
+ * （withinGraphemes と同じ）も守る（Tailscale の表示名から自動登録するときなど。総点検のレビュー C10）
+ */
+export function fitGraphemes(value: string, max: number): string {
+  const limit = Math.max(16, max * 4);
+  let out = '';
+  let count = 0;
+  for (const g of graphemes(value)) {
+    if (g.length > MAX_UNITS_PER_GRAPHEME) continue;
+    if (count >= max || out.length + g.length > limit) break;
+    out += g;
+    count++;
+  }
+  return out;
+}
+
+/**
+ * 名前を比べるときの鍵（NFC・前後の空白除去のあと、見た目を変えない文字（異体字セレクタ・ZWJ・タグなど。
+ * Default_Ignorable_Code_Point）を除く）。見た目が同じ名前を別の名前として通さない（総点検のレビュー C9）
+ */
+export function nameKey(value: string): string {
+  return normalizeText(value).replace(/\p{Default_Ignorable_Code_Point}/gu, '');
+}

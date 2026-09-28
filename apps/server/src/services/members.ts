@@ -1,12 +1,13 @@
 import {
   type Clock,
+  fitGraphemes,
   graphemes,
   MEMBER_COLORS,
   type MemberColor,
+  nameKey,
   normalizeLogin,
   normalizeText,
   removeHiddenCharacters,
-  truncateGraphemes,
   uuidv7,
 } from '@ito/core';
 import { and, asc, eq, isNull } from 'drizzle-orm';
@@ -43,13 +44,13 @@ export function findMemberById(db: DbLike, id: string): MemberRow | undefined {
   return db.select().from(members).where(eq(members.id, id)).get();
 }
 
+/**
+ * 有効なメンバーに同じ名前がいるか。見た目を変えない文字を除いた鍵で比べる（異体字セレクタや ZWJ を足して
+ * ほかの家族と同じに見える名前にさせない。§10。総点検のレビュー C9）
+ */
 export function isNameTaken(db: DbLike, name: string, exceptId?: string): boolean {
-  const row = db
-    .select({ id: members.id })
-    .from(members)
-    .where(and(eq(members.name, normalizeText(name)), isNull(members.disabledAt)))
-    .get();
-  return row !== undefined && row.id !== exceptId;
+  const key = nameKey(name);
+  return listActiveMembers(db).some((m) => m.id !== exceptId && nameKey(m.name) === key);
 }
 
 export function isColorTaken(db: DbLike, color: string, exceptId?: string): boolean {
@@ -62,17 +63,19 @@ export function isColorTaken(db: DbLike, color: string, exceptId?: string): bool
 }
 
 /**
- * 名前がほかの有効なメンバーとぶつかったら、20 文字に収まるように末尾に 2, 3… を付ける（RUNBOOK 3.・SPEC §24 D18）
+ * 名前がほかの有効なメンバーとぶつかったら、20 文字に収まるように末尾に 2, 3… を付ける（RUNBOOK 3.・SPEC §24 D18）。
+ * taken はほかのメンバーの名前。見た目を変えない文字を除いた鍵で比べ、長さは入力と同じ決まりに収める（C9・C10）
  */
 export function uniqueName(base: string, taken: ReadonlySet<string>): string {
+  const keys = new Set([...taken].map(nameKey));
   // 切り詰めたあとにも前後の空白を除く（比べるときの正規化と合わせる）
-  const name = normalizeText(truncateGraphemes(normalizeText(base), NAME_MAX));
-  if (!taken.has(name)) return name;
+  const name = normalizeText(fitGraphemes(normalizeText(base), NAME_MAX));
+  if (!keys.has(nameKey(name))) return name;
   for (let n = 2; ; n++) {
     const suffix = String(n);
-    const head = normalizeText(truncateGraphemes(name, NAME_MAX - suffix.length));
+    const head = normalizeText(fitGraphemes(name, NAME_MAX - suffix.length));
     const candidate = `${head}${suffix}`;
-    if (!taken.has(candidate)) return candidate;
+    if (!keys.has(nameKey(candidate))) return candidate;
   }
 }
 
@@ -98,10 +101,10 @@ export function autoRegisterAdmin(
     const normalizedLogin = normalizeLogin(login);
     const fallback = normalizedLogin.split('@')[0] ?? normalizedLogin;
     // 表示名の見えない文字・制御文字は除く（総点検 A6）
-    const base =
-      normalizeText(removeHiddenCharacters(displayName ?? '')) ||
-      normalizeText(removeHiddenCharacters(fallback)) ||
-      'メンバー';
+    // 長すぎる 1 文字は除き、名前の長さの上限に収める（C10）
+    const clean = (value: string) =>
+      normalizeText(fitGraphemes(removeHiddenCharacters(value), NAME_MAX));
+    const base = clean(displayName ?? '') || clean(fallback) || 'メンバー';
     const name = uniqueName(base, new Set(active.map((m) => m.name)));
     const color = firstFreeColor(new Set(active.map((m) => m.color)));
     if (!color) return null;

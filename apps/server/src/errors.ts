@@ -9,6 +9,7 @@ const TITLES: Record<string, string> = {
   csrf: 'このリクエストは受け付けられません',
   misdirected: 'ホスト名が正しくありません',
   payload_too_large: '送信内容が大きすぎます',
+  body_incomplete: '送信内容を最後まで受け取れませんでした',
   not_found: '見つかりません',
   occurrence_not_found: 'この回は見つかりません',
   gone: 'この予定は削除されています',

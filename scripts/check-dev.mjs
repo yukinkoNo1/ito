@@ -40,7 +40,12 @@ try {
   process.stdout.write('server: /healthz 200\n');
   const page = await waitFor('http://localhost:5173/', {}, (r) => r.ok);
   process.stdout.write(`web: / ${page.status}\n`);
-  const me = await waitFor('http://localhost:5173/api/me', {}, (r) => r.status < 500);
+  // /api の GET も X-Ito-Client が要る（SPEC §14 の 4.。アプリの fetch と同じく付ける）
+  const me = await waitFor(
+    'http://localhost:5173/api/me',
+    { headers: { 'X-Ito-Client': '1' } },
+    (r) => r.status < 500,
+  );
   process.stdout.write(`web → server（proxy）: /api/me ${me.status}\n`);
   ok = page.ok && me.ok;
 } catch (e) {

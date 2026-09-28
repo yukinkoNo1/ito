@@ -1,5 +1,5 @@
 import { createECDH, randomBytes } from 'node:crypto';
-import { type EventDTO, fromJst, type PushPayload } from '@ito/core';
+import { type EventDTO, fromJst, type PushPayload, uuidv7 } from '@ito/core';
 import { eq } from 'drizzle-orm';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import webpush from 'web-push';
@@ -926,10 +926,27 @@ describe('購読の数と送り先（総点検 B4）', () => {
     expect(over.status).toBe(409);
     expect(((await over.json()) as { code: string }).code).toBe('device_limit');
     expect((await post('yuki', endpointOf('yuki'))).status).toBe(200);
-    // ほかの家族の端末を引き継ぐときも数える
-    expect((await post('yuki', endpointOf('haru'))).status).toBe(409);
     // ほかの家族は影響を受けない
     expect((await post('haru', 'https://fcm.googleapis.com/fcm/send/haru-2')).status).toBe(200);
+  });
+
+  it('ほかの家族の端末を引き継ぐ（同じ endpoint を登録し直す）ときは台数に数えない。前の持ち主の通知はその端末に届かない（レビュー C8）', async () => {
+    // ゆきは 10 台（beforeEach の 1 台＋9 台）
+    for (let i = 2; i <= 10; i++) {
+      expect((await post('yuki', `https://fcm.googleapis.com/fcm/send/yuki-${i}`)).status).toBe(
+        200,
+      );
+    }
+    // はるの端末（タブレット）をゆきが使い始める
+    const res = await post('yuki', endpointOf('haru'));
+    expect(res.status).toBe(200);
+    expect(subscriptionOf('haru')?.memberId).toBe(IDS.yuki);
+    sender.clear();
+    const test = await send(ctx, 'POST', '/api/push/test', { headers: as('haru'), body: {} });
+    expect(test.status).toBe(200);
+    expect(sender.sent.map((x) => x.endpoint)).not.toContain(endpointOf('haru'));
+    // 新しい端末は 11 台目なので 409 のまま
+    expect((await post('yuki', 'https://fcm.googleapis.com/fcm/send/yuki-new')).status).toBe(409);
   });
 
   it('送り先はプッシュサービスだけ（家の LAN・任意のサーバーは 422。行を作らない）', async () => {
@@ -948,5 +965,55 @@ describe('購読の数と送り先（総点検 B4）', () => {
       .where(eq(pushSubscriptions.memberId, IDS.yuki))
       .all();
     expect(rows.map((r) => r.endpoint)).toEqual([endpointOf('yuki')]);
+  });
+});
+
+describe('「これ以降」で非公開にしたときのまとめ待ち（総点検のレビュー C4）', () => {
+  it('家族の繰り返しを「これ以降」で非公開にしたら、ほかの家族が書いたまとめ待ちの件名も「予定あり」になる', async () => {
+    await setNotifications('papa', { familyChanges: 'all' });
+    at('2026-09-28', '10:00');
+    const series = await make(
+      'mama',
+      timed('2026-10-01', '19:00', null, {
+        title: '習い事',
+        rrule: 'FREQ=WEEKLY',
+        forEveryone: true,
+        memberIds: [],
+      }),
+    );
+    at('2026-09-28', '10:03');
+    await scheduler.tick();
+    sender.clear();
+    // はるが 10/15 の回だけ件名を変える
+    at('2026-09-28', '10:05');
+    const changed = await send(ctx, 'PATCH', `/api/events/${series.id}`, {
+      headers: { ...as('haru'), 'if-match': String(series.version), 'idempotency-key': 'c4-1' },
+      body: {
+        scope: 'this',
+        recurrenceId: '2026-10-15T19:00',
+        exceptionId: uuidv7(fromJst('2026-09-28', '10:05')),
+        changes: { title: '心療内科（ママ）' },
+      },
+    });
+    expect(changed.status).toBe(200);
+    const version = ((await changed.json()) as { event: EventDTO }).event.version;
+    // 30 秒後、お母さんが 10/15 以降を非公開にする
+    ctx.clock.advance(30_000);
+    const hidden = await send(ctx, 'PATCH', `/api/events/${series.id}`, {
+      headers: { ...as('mama'), 'if-match': String(version), 'idempotency-key': 'c4-2' },
+      body: {
+        scope: 'following',
+        recurrenceId: '2026-10-15T19:00',
+        exceptionId: uuidv7(fromJst('2026-09-28', '10:06')),
+        changes: { visibility: 'private' },
+      },
+    });
+    expect(hidden.status).toBe(200);
+    const rows = ctx.database.db.select().from(pendingNotices).all();
+    expect(rows.map((r) => r.summary).join('\n')).not.toContain('心療内科');
+    at('2026-09-28', '10:09');
+    await scheduler.tick();
+    expect(JSON.stringify(sender.to('papa'))).not.toContain('心療内科');
+    expect(JSON.stringify(sender.sent)).not.toContain('心療内科');
   });
 });

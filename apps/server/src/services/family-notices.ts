@@ -137,3 +137,30 @@ export function enqueueFamilyNotices(
       .run();
   }
 }
+
+/**
+ * その予定のまとめ待ちの件名を、持ち主以外には伏せる（家族の繰り返しを「これ以降」で非公開にしたとき）。
+ * 回ごとの行を分けられないので、シリーズの行をまとめて伏せる（履歴を持ち主だけにするのと同じ。安全側。
+ * §24 D39 (4)。総点検のレビュー C4）
+ */
+export function hidePendingNoticesOf(db: DbLike, eventId: string, ownerId: string): void {
+  const names = new Map(
+    db
+      .select()
+      .from(members)
+      .all()
+      .map((m) => [m.id, m.name]),
+  );
+  const rows = db
+    .select()
+    .from(pendingNotices)
+    .where(and(eq(pendingNotices.eventId, eventId), isNull(pendingNotices.flushedAt)))
+    .all();
+  for (const r of rows) {
+    if (r.recipientId === ownerId) continue;
+    db.update(pendingNotices)
+      .set({ summary: noticeSummary(names.get(r.actorId) ?? '家族', HIDDEN_TITLE, r.action) })
+      .where(eq(pendingNotices.id, r.id))
+      .run();
+  }
+}

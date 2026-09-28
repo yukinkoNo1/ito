@@ -27,6 +27,7 @@ import { events, type MemberRow } from '../db/schema';
 import { ApiError } from '../errors';
 import { validationError } from '../lib/validate';
 import { describeDiff, hideActivityOf, memberNames, recordActivity } from './activity';
+import { hidePendingNoticesOf } from './family-notices';
 import { insertRecord, loadExceptions, recordChange, updateRecord } from './records';
 import { copyReminderPrefs } from './reminders';
 
@@ -369,6 +370,8 @@ export function updateFollowing(
     // （回ごとの履歴はシリーズの ID に付くので、シリーズの履歴をまとめて持ち主だけにする。安全側。§24 D27・総点検 A9）
     if (master.visibility === 'family' && created.visibility === 'private') {
       hideActivityOf(db, master.id, master.ownerId);
+      // 送る前のまとめ待ち（ほかの家族が書いた「この回だけ」の件名など）も伏せる（総点検のレビュー C4）
+      hidePendingNoticesOf(db, master.id, master.ownerId);
     }
     recordActivity(db, clock, me.id, 'create', created, diff);
   }

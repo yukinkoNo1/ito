@@ -80,6 +80,62 @@ export function extendFlowRange(
   return { from, to: byScroll && trimmed < range.to ? trimmed : range.to };
 }
 
+/**
+ * 「新しい予定 n件」の数。スクロールで描く範囲が変わっても同じ数になるよう、いつも最初の範囲（今日の前後）で数える。
+ * 範囲を足すたびに数え直さないよう、FlowContainer は範囲と別に覚えておく（§19。§24 D40）
+ */
+export function countFlowFresh(
+  events: LocalEvent[],
+  ctx: VmContext,
+  filter: string[] | null,
+): number {
+  const items = buildFlowItems(
+    events,
+    addDays(ctx.today, -1),
+    addDays(ctx.today, FLOW_WINDOW_DAYS),
+    ctx,
+    filter,
+    [],
+  );
+  let freshCount = 0;
+  for (const item of items) {
+    if (item.kind !== 'day') continue;
+    for (const a of item.day.allDay)
+      if (a.occ.fresh && (a.span === 'single' || a.span === 'start')) freshCount++;
+    for (const t of item.day.timed) if (t.occ.fresh) freshCount++;
+  }
+  return freshCount;
+}
+
+/** 素のデータ（VM）の中身が同じか（関数を含まない配列・オブジェクト・プリミティブ） */
+export function sameData(a: unknown, b: unknown): boolean {
+  if (a === b) return true;
+  if (typeof a !== 'object' || typeof b !== 'object' || a === null || b === null) return false;
+  if (Array.isArray(a) !== Array.isArray(b)) return false;
+  if (Array.isArray(a) && Array.isArray(b)) {
+    return a.length === b.length && a.every((v, i) => sameData(v, b[i]));
+  }
+  const ka = Object.keys(a);
+  const kb = Object.keys(b);
+  if (ka.length !== kb.length) return false;
+  const ra = a as Record<string, unknown>;
+  const rb = b as Record<string, unknown>;
+  return ka.every((k) => Object.hasOwn(rb, k) && sameData(ra[k], rb[k]));
+}
+
+/**
+ * 作り直した一覧のうち、中身が前と同じ行は前のオブジェクトを使う（範囲を足したとき、変わらない日を
+ * 描き直さない。UpcomingScreen は行を memo で描く。§19。§24 D40）
+ */
+export function reuseSame<T extends { key: string }>(prev: readonly T[] | null, next: T[]): T[] {
+  if (!prev || prev.length === 0) return next;
+  const byKey = new Map(prev.map((item) => [item.key, item]));
+  return next.map((item) => {
+    const old = byKey.get(item.key);
+    return old !== undefined && sameData(old, item) ? old : item;
+  });
+}
+
 export function buildFlowScreen(input: {
   events: LocalEvent[];
   ctx: VmContext;
@@ -91,29 +147,13 @@ export function buildFlowScreen(input: {
   unreadActivity: number;
   notice: HomeNoticeVM;
   showBackToToday: boolean;
+  /** 範囲と別に数えた「新しい予定」の数（なければここで数える） */
+  freshCount?: number;
 }): FlowScreenData {
   const { events, ctx, filter } = input;
   // 週の帯・日付で移動した日は、予定がなくても日の見出しを出して、そこへ合わせる
   const items = buildFlowItems(events, input.from, input.to, ctx, filter, [input.selectedDate]);
-  // 「新しい予定 n件」は、スクロールで描く範囲が変わっても同じ数になるよう、いつも最初の範囲（今日の前後）で数える
-  const freshItems =
-    input.from === addDays(ctx.today, -1) && input.to === addDays(ctx.today, FLOW_WINDOW_DAYS)
-      ? items
-      : buildFlowItems(
-          events,
-          addDays(ctx.today, -1),
-          addDays(ctx.today, FLOW_WINDOW_DAYS),
-          ctx,
-          filter,
-          [],
-        );
-  let freshCount = 0;
-  for (const item of freshItems) {
-    if (item.kind !== 'day') continue;
-    for (const a of item.day.allDay)
-      if (a.occ.fresh && (a.span === 'single' || a.span === 'start')) freshCount++;
-    for (const t of item.day.timed) if (t.occ.fresh) freshCount++;
-  }
+  const freshCount = input.freshCount ?? countFlowFresh(events, ctx, filter);
   const todayOccs = groupByDay(events, ctx.today, addDays(ctx.today, 1), ctx, null).get(ctx.today);
   const today = buildDay(ctx.today, todayOccs, ctx);
   return {

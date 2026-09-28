@@ -1,6 +1,6 @@
-import { addDays, fromJst, uuidv7 } from '@ito/core';
+import { addDays, fromJst, memberMarkSchema, memberNameSchema, uuidv7 } from '@ito/core';
 import { eq } from 'drizzle-orm';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { events, members, pushSubscriptions } from '../src/db/schema';
 import { createFeedToken } from '../src/services/feed-tokens';
 import { as, createEvent, IDS, LOGINS, seedFamily, syncAs, timed } from './family';
@@ -514,5 +514,164 @@ describe('B5 結合文字を大量に付けた「1 文字」', () => {
       memberIds: [IDS.yuki],
     });
     expect(res.status).toBe(422);
+  });
+});
+
+/*
+ * 総点検の修正のレビュー（docs/security-review.md の C1〜C10）の再現テスト。どれも直す前に失敗することを確かめてから直した
+ */
+describe('C5 表示用フィードの認証の失敗は、失敗が止んだあとも 1 分ほどで件数を WARN に出す（タイマーを掛け直す）', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('0 秒・10 秒・65 秒・66 秒に失敗して 10 分静かなら、WARN の件数の合計は 4', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    ctx = createTestContext(tailscaleEnv(), { now: NOW });
+    seedFamily(ctx);
+    let t = 0;
+    const until = async (ms: number) => {
+      while (t < ms) {
+        t += 1000;
+        ctx.clock.advance(1000);
+        vi.advanceTimersByTime(1000);
+      }
+    };
+    const fail = () =>
+      send(ctx, 'GET', '/api/feed/display', {
+        csrf: false,
+        headers: { authorization: `Bearer ito_feed_${'B'.repeat(43)}` },
+      });
+    for (const at of [0, 10_000, 65_000, 66_000]) {
+      await until(at);
+      expect((await fail()).status).toBe(401);
+    }
+    await until(66_000 + 10 * 60_000);
+    const total = ctx.logs.lines
+      .flatMap((l) => l.split(String.fromCharCode(10)))
+      .filter((l) => l.includes('feed auth failed'))
+      .reduce((n, l) => n + ((JSON.parse(l) as { failures: number }).failures ?? 0), 0);
+    expect(total).toBe(4);
+  });
+});
+
+describe('C7 本文が途中で切れた要求は 400（500 と ERROR のログにしない）', () => {
+  it('本文を 10 バイト送ったところで切れても、500 にならず unhandled error を出さない', async () => {
+    ctx = createTestContext(tailscaleEnv(), { now: NOW });
+    seedFamily(ctx);
+    for (const who of [{}, tsUser(LOGINS.papa)]) {
+      const stream = new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(new TextEncoder().encode('{"title":"'));
+          controller.error(new Error('aborted'));
+        },
+      });
+      const request = new Request(`http://${ctx.env.APP_HOST}/api/events`, {
+        method: 'POST',
+        headers: { host: ctx.env.APP_HOST, ...APP, ...who, 'content-length': '100' },
+        body: stream,
+        duplex: 'half',
+      } as RequestInit);
+      const res = await ctx.app.request(request);
+      expect(res.status).toBe(400);
+    }
+    expect(ctx.logs.lines.join('')).not.toContain('unhandled error');
+  });
+});
+
+describe('C9 見た目を変えない文字（異体字セレクタ・ZWJ・タグ）を足しても、ほかの家族と同じ名前にできない', () => {
+  const c = (...cps: number[]) => String.fromCodePoint(...cps);
+
+  it('お母さんに異体字セレクタを足した名前・絵文字に FE0F や ZWJ・タグを足した名前は 409 name_taken', async () => {
+    ctx = createTestContext(devEnv(), { now: NOW });
+    seedFamily(ctx);
+    for (const name of [
+      `お母${c(0xfe00)}さん`,
+      `お母${c(0xe0100)}さん`,
+      `お母${c(0xfe0f)}さん`,
+      `お母${c(0xfe0e)}さん`,
+      `お母${c(0xe01ef)}さん`,
+    ]) {
+      const res = await send(ctx, 'PATCH', '/api/me', { headers: as('haru'), body: { name } });
+      expect([name, res.status]).toEqual([name, 409]);
+    }
+    // 家族の管理から足すときも同じ
+    const add = await send(ctx, 'POST', '/api/members', {
+      headers: as('papa'),
+      body: { login: 'new@example.com', name: `お父${c(0xfe01)}さん`, mark: 'あ', color: 'momo' },
+    });
+    expect(add.status).toBe(409);
+    const grin = c(0x1f600);
+    const flag = c(0x1f3f4);
+    expect(
+      (await send(ctx, 'PATCH', '/api/me', { headers: as('mama'), body: { name: `ママ${grin}` } }))
+        .status,
+    ).toBe(200);
+    expect(
+      (await send(ctx, 'PATCH', '/api/me', { headers: as('papa'), body: { name: `パパ${flag}` } }))
+        .status,
+    ).toBe(200);
+    for (const name of [
+      `ママ${grin}${c(0xfe0f)}`,
+      `ママ${grin}${c(0xfe0e)}`,
+      `パパ${flag}${c(0xe0078, 0xe007f)}`,
+    ]) {
+      const res = await send(ctx, 'PATCH', '/api/me', { headers: as('haru'), body: { name } });
+      expect([name, res.status]).toEqual([name, 409]);
+    }
+  });
+
+  it('自動登録の名前も、見た目が同じ名前なら末尾に番号を付ける', async () => {
+    ctx = createTestContext(tailscaleEnv(), { now: NOW });
+    seedFamily(ctx);
+    const raw = `お母${c(0xfe00)}さん`;
+    const res = await send(ctx, 'GET', '/api/me', {
+      headers: tsUser('admin@example.com', `=?utf-8?B?${Buffer.from(raw).toString('base64')}?=`),
+    });
+    expect(res.status).toBe(200);
+    expect(((await res.json()) as { name: string }).name).toMatch(/2$/);
+  });
+});
+
+describe('C10 自動登録の名前・略称にも長さの上限を当てる（B5）', () => {
+  it('Tailscale の表示名に結合文字を大量に付けても、名前・略称は入力と同じ決まりに収まる', async () => {
+    const acute = (n: number) => String.fromCodePoint(0x301).repeat(n);
+    const family = String.fromCodePoint(0x1f468, 0x200d, 0x1f469, 0x200d, 0x1f467, 0x200d, 0x1f466);
+    for (const raw of [`ゆ${acute(2000)}き`, `ゆ${acute(100)}`, family.repeat(8), acute(50)]) {
+      ctx = createTestContext(tailscaleEnv(), { now: NOW });
+      const res = await send(ctx, 'GET', '/api/me', {
+        headers: tsUser('admin@example.com', `=?utf-8?B?${Buffer.from(raw).toString('base64')}?=`),
+      });
+      expect(res.status).toBe(200);
+      const me = (await res.json()) as { name: string; mark: string };
+      expect([raw.length, memberNameSchema.safeParse(me.name).success]).toEqual([raw.length, true]);
+      expect([raw.length, memberMarkSchema.safeParse(me.mark).success]).toEqual([raw.length, true]);
+      ctx.close();
+    }
+  });
+});
+
+describe('C6 /api の GET は X-Ito-Client が要る（設置後の確認・開発の確認で送るもの）', () => {
+  it('本番の設定: X-Ito-Client だけで ID ヘッダがなければ 401 no_identity（タグの端末）。X-Ito-Client がなければ 403 csrf', async () => {
+    ctx = createTestContext(tailscaleEnv(), { now: NOW });
+    seedFamily(ctx);
+    const tagDevice = await send(ctx, 'GET', '/api/me', {
+      csrf: false,
+      headers: { 'x-ito-client': '1' },
+    });
+    expect(tagDevice.status).toBe(401);
+    expect(((await tagDevice.json()) as { code: string }).code).toBe('no_identity');
+    const plain = await send(ctx, 'GET', '/api/me', { csrf: false });
+    expect(plain.status).toBe(403);
+  });
+
+  it('開発の設定: X-Ito-Client だけで /api/me が 200（scripts/check-dev.mjs が送るもの）', async () => {
+    ctx = createTestContext(devEnv(), { now: NOW });
+    seedFamily(ctx);
+    const res = await send(ctx, 'GET', '/api/me', {
+      csrf: false,
+      headers: { 'x-ito-client': '1' },
+    });
+    expect(res.status).toBe(200);
   });
 });

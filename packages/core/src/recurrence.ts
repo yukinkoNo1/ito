@@ -288,7 +288,33 @@ function rruleWeekday(w: Weekday): number {
   return (w + 6) % 7;
 }
 
-const ruleCache = new Map<string, RRuleInstance>();
+/**
+ * 使った順に残すキャッシュ（いっぱいになったら、いちばん前に使ったものから捨てる）。いっぱいで全部を捨てると、
+ * 行が多いときに毎回計算し直すことになるため（総点検のレビュー C1・C2）
+ */
+class LruCache<V> {
+  private readonly map = new Map<string, V>();
+  constructor(private readonly capacity: number) {}
+  get(key: string): V | undefined {
+    const value = this.map.get(key);
+    if (value !== undefined) {
+      this.map.delete(key);
+      this.map.set(key, value);
+    }
+    return value;
+  }
+  set(key: string, value: V): V {
+    this.map.delete(key);
+    this.map.set(key, value);
+    if (this.map.size > this.capacity) {
+      const oldest = this.map.keys().next();
+      if (!oldest.done) this.map.delete(oldest.value);
+    }
+    return value;
+  }
+}
+
+const ruleCache = new LruCache<RRuleInstance>(4000);
 
 const RRULE_FREQ = {
   DAILY: RRule.DAILY,
@@ -313,12 +339,6 @@ function byOptions(rule: RuleParts) {
   };
 }
 
-function remember<K, V>(cache: Map<K, V>, key: K, value: V): V {
-  if (cache.size > 500) cache.clear();
-  cache.set(key, value);
-  return value;
-}
-
 function toRRule(rule: RuleParts, dtstart: Wall): RRuleInstance {
   const key = `${formatRrule(rule)}|${dtstart.date}T${dtstart.time}`;
   const hit = ruleCache.get(key);
@@ -331,14 +351,16 @@ function toRRule(rule: RuleParts, dtstart: Wall): RRuleInstance {
     until: rule.until ? untilToFloating(rule.until) : null,
     ...byOptions(rule),
   });
-  return remember(ruleCache, key, r);
+  return ruleCache.set(key, r);
 }
 
 /* ───────── 展開の重さを抑える（総点検 B1。§24 D39） ─────────
  * rrule は開始から 1 期間（毎日は日、毎月は月…）ずつ歩き、回が出ない期間も歩く。回の出ない規則（2 月 30 日など）は
  * 9999 年まで空回りし、1970 年に始まる毎日の規則は表示範囲まで 2 万日を歩く。そこで
  * (1) 保存するとき、回の出ない期間が続きすぎる規則を拒む（ruleDensityError）
- * (2) 展開は、表示範囲の少し前の期間の初めから始める（開始を期間の単位で送る。COUNT は最後の回を UNTIL にしてから）
+ * (2) 展開は、表示範囲の少し前の期間の初めから始める（開始を期間の単位で送る）。COUNT の毎日・毎週は、送った期間で
+ *     飛ばした回の数を計算で出して COUNT から引く。COUNT の毎月・毎年は送らない（歩くのは COUNT の回まで）
+ * 展開のたびに行うのは計算だけで、シリーズ全体を歩かない（総点検のレビュー C1・C2）
  */
 
 /** 回の出ない期間（毎月は月、毎年は年。間隔ごとに数える）が続いてよい数。毎日・毎週は規則の形から続かない */
@@ -396,33 +418,63 @@ function periodHasOccurrence(rule: RuleParts, periodStart: Wall): boolean {
   return r.after(toFloating(periodStart), true) !== null;
 }
 
-const densityCache = new Map<string, boolean>();
+const densityCache = new LruCache<boolean>(4000);
 
 /**
- * 回の出ない期間が MAX_EMPTY_PERIODS を超えて続かないか。毎月は (年 mod 400, 月)、毎年は (年 mod 400) の周期を、
- * 間隔ごとに一回りたどる（毎月は最大 4,800 期間、毎年は最大 400 期間）。期間の回の有無は、月の長さ・1 日の曜日
- * （毎年は前後の年のうるう年と 1/1 の曜日）が同じなら同じなので、その組ごとに rrule で 1 期間だけ確かめる
+ * どの期間にも回が出るのが規則の形から分かるか（周期をたどらなくてよい）。毎月の 1〜28 日（-1〜-28 日）・毎週の
+ * 曜日・第 1〜4 曜日、毎年のそれに当たるものなど。UI で作れる規則はほとんどこれに当たる（総点検のレビュー C2）
+ */
+function everyPeriodHasOccurrence(ex: RuleParts): boolean {
+  if (ex.bySetPos.length > 0 || ex.byYearDay.length > 0 || ex.byWeekNo.length > 0) return false;
+  // 日と曜日の両方を書くと、両方に合う日だけになる（13 日の金曜など）
+  if (ex.byMonthDay.length > 0 && ex.byDay.length > 0) return false;
+  const someDay = ex.byMonthDay.some((v) => Math.abs(v) <= 28);
+  const someWeekday = (limit: number) =>
+    ex.byDay.some((d) => d.nth === null || Math.abs(d.nth) <= limit);
+  if (ex.freq === 'MONTHLY') {
+    // 毎月の月の絞り込みは、間隔との組み合わせで回の出ない月が決まるので周期をたどる
+    if (ex.byMonth.length > 0) return false;
+    return ex.byMonthDay.length > 0 ? someDay : someWeekday(4);
+  }
+  if (ex.byMonthDay.length > 0) return someDay;
+  // 毎年の第 n 曜日は、月を決めればその月の中、決めなければ年の中の n 番目
+  return ex.byMonth.length > 0 ? someWeekday(4) : someWeekday(52);
+}
+
+/** その月の 1 日の曜日（0=日。文字列を作らずに計算する） */
+function firstWeekday(y: number, m: number): number {
+  return new Date(Date.UTC(y, m - 1, 1)).getUTCDay();
+}
+
+/**
+ * 回の出ない期間が MAX_EMPTY_PERIODS を超えて続かないか。規則の形から分かるものはすぐ返す。そうでなければ、
+ * 毎月は (年 mod 400, 月)、毎年は (年 mod 400) の周期を、間隔ごとに一回りたどる（毎月は最大 4,800 期間、
+ * 毎年は最大 400 期間）。期間の回の有無は、月の長さ・1 日の曜日（毎年は前後の年のうるう年と 1/1 の曜日）が同じなら
+ * 同じなので、その組ごとに rrule で 1 期間だけ確かめる。結果は覚えておく
  */
 function denseEnough(rule: RuleParts, dtstart: Wall): boolean {
   if (rule.freq === 'DAILY' || rule.freq === 'WEEKLY') return true;
   const ex = explicitRule({ ...rule, count: null, until: null }, dtstart.date);
+  if (everyPeriodHasOccurrence(ex)) return true;
   const { year, month } = parseDate(dtstart.date);
   const monthly = rule.freq === 'MONTHLY';
   const cycle = monthly ? 4800 : 400;
   const origin = monthly ? year * 12 + (month - 1) : year;
-  const key = `${formatRrule(ex)}|${((origin % cycle) + cycle) % cycle}`;
+  // たどる期間の組は、開始を「間隔と周期の最大公約数」で割った余りで決まる（どこから回り始めても、続く長さは同じ）。
+  // 開始の日だけが違う同じ規則は 1 つにまとまる
+  const g = gcd(rule.interval, cycle);
+  const key = `${formatRrule(ex)}|${((origin % g) + g) % g}`;
   const hit = densityCache.get(key);
   if (hit !== undefined) return hit;
 
   const byKind = new Map<string, boolean>();
   const produces = (y: number, m: number): boolean => {
-    const first = `${y}-${pad2(m)}-01`;
     const kind = monthly
-      ? `${m}|${daysInMonth(y, m)}|${weekdayOf(first)}`
-      : `${isLeapYear(y - 1)}|${isLeapYear(y)}|${isLeapYear(y + 1)}|${weekdayOf(first)}`;
+      ? `${m}|${daysInMonth(y, m)}|${firstWeekday(y, m)}`
+      : `${isLeapYear(y - 1)}|${isLeapYear(y)}|${isLeapYear(y + 1)}|${firstWeekday(y, 1)}`;
     const known = byKind.get(kind);
     if (known !== undefined) return known;
-    const has = periodHasOccurrence(ex, { date: first, time: dtstart.time });
+    const has = periodHasOccurrence(ex, { date: `${y}-${pad2(m)}-01`, time: dtstart.time });
     byKind.set(kind, has);
     return has;
   };
@@ -442,7 +494,7 @@ function denseEnough(rule: RuleParts, dtstart: Wall): boolean {
     run = flags[j % steps] ? 0 : run + 1;
     if (run > MAX_EMPTY_PERIODS[rule.freq]) ok = false;
   }
-  return remember(densityCache, key, ok);
+  return densityCache.set(key, ok);
 }
 
 /** 保存する規則の検査（開始が決まってから）。回が 1 つも出ない・まれにしか出ない規則はエラーの文 */
@@ -451,22 +503,6 @@ export function ruleDensityError(rule: RuleParts, dtstart: Wall): string | null 
   return rule.freq === 'MONTHLY'
     ? '回がほとんど出ない繰り返しです（回の出ない月が 120 回を超えて続きます）'
     : '回がほとんど出ない繰り返しです（回の出ない年が 10 回を超えて続きます）';
-}
-
-function toUntilValue(w: Wall): string {
-  return `${w.date.replaceAll('-', '')}T${w.time.replace(':', '')}00`;
-}
-
-const countEndCache = new Map<string, Wall | null>();
-
-/** COUNT の規則の最後の回（回が COUNT に満たなければ null）。1 度だけ開始から歩いて覚えておく */
-function lastOfCount(rule: RuleParts, dtstart: Wall): Wall | null {
-  const key = `${formatRrule(rule)}|${dtstart.date}T${dtstart.time}`;
-  const hit = countEndCache.get(key);
-  if (hit !== undefined) return hit;
-  const all = toRRule(rule, dtstart).all();
-  const last = all.length === rule.count ? all[all.length - 1] : undefined;
-  return remember(countEndCache, key, last ? fromFloating(last) : null);
 }
 
 /** 期間の番号（毎日は日、毎週は 7 日、毎月は月、毎年は年） */
@@ -479,33 +515,42 @@ function periodIndex(freq: RuleFreq, date: DateISO): number {
 }
 
 /**
- * from より前の回を出さなくてよいとき、開始を間隔の倍数の期間だけ送った規則（送らなくてよければ null）。
- * from の 1 期間前より前にとどめ、毎月・毎年は期間の初めに置く（回は期間の中で開始より後だけが出るため）
+ * from より前の回を出さなくてよいとき、開始を間隔の倍数の期間だけ送った規則（送らなくてよければ null、
+ * COUNT の回を送った範囲で使い切っていれば 'ended'）。from の 1 期間前より前にとどめ、毎月・毎年は期間の初めに
+ * 置く（回は期間の中で開始より後だけが出るため）。
+ * COUNT の毎日は曜日の一回り（7 期間）ごとに送る: 7 期間に曜日が 1 回ずつ来るので、飛ばす回は「送った一回りの数 ×
+ * 曜日の数」。COUNT の毎週は「送った期間の数 × 曜日の数」（最初の週の途中から数えても同じ）。
+ * COUNT の毎月・毎年は、期間ごとの回の数が決まらないので送らない（歩くのは COUNT の回か表示範囲まで）
  */
 function rebased(
   rule: RuleParts,
   dtstart: Wall,
   from: Wall,
-): { rule: RuleParts; dtstart: Wall } | null {
-  let base = rule;
-  if (base.count !== null) {
-    const last = lastOfCount(base, dtstart);
-    if (last === null) return null;
-    base = { ...base, count: null, until: toUntilValue(last) };
-  }
-  const n = base.interval;
+): { rule: RuleParts; dtstart: Wall } | 'ended' | null {
+  if (rule.count !== null && (rule.freq === 'MONTHLY' || rule.freq === 'YEARLY')) return null;
+  const n = rule.interval;
+  const step = rule.freq === 'DAILY' && rule.count !== null ? 7 : 1;
   const k =
-    Math.floor((periodIndex(base.freq, from.date) - periodIndex(base.freq, dtstart.date)) / n) - 1;
-  if (k <= 0) return base === rule ? null : { rule: base, dtstart };
+    Math.floor(
+      (periodIndex(rule.freq, from.date) - periodIndex(rule.freq, dtstart.date)) / (n * step),
+    ) - 1;
+  if (k <= 0) return null;
+  const ex = explicitRule(rule, dtstart.date);
+  let count = rule.count;
+  if (count !== null) {
+    const weekdays = new Set(ex.byDay.map((d) => d.weekday)).size;
+    count -= k * (rule.freq === 'DAILY' && weekdays === 0 ? 7 : weekdays);
+    if (count <= 0) return 'ended';
+  }
   const { year, month } = parseDate(dtstart.date);
   let date: DateISO;
-  if (base.freq === 'DAILY') date = addDays(dtstart.date, k * n);
-  else if (base.freq === 'WEEKLY') date = addDays(dtstart.date, k * n * 7);
-  else if (base.freq === 'MONTHLY') {
+  if (rule.freq === 'DAILY') date = addDays(dtstart.date, k * n * step);
+  else if (rule.freq === 'WEEKLY') date = addDays(dtstart.date, k * n * 7);
+  else if (rule.freq === 'MONTHLY') {
     const at = year * 12 + (month - 1) + k * n;
     date = `${Math.floor(at / 12)}-${pad2((at % 12) + 1)}-01`;
   } else date = `${year + k * n}-01-01`;
-  return { rule: explicitRule(base, dtstart.date), dtstart: { date, time: dtstart.time } };
+  return { rule: { ...ex, count }, dtstart: { date, time: dtstart.time } };
 }
 
 /**
@@ -523,7 +568,9 @@ export function ruleStarts(
   const toD = toFloating(to);
   if (toD <= fromD) return [];
   if (!denseEnough(rule, dtstart)) return [];
-  const base = rebased(rule, dtstart, from) ?? { rule, dtstart };
+  const moved = rebased(rule, dtstart, from);
+  if (moved === 'ended') return [];
+  const base = moved ?? { rule, dtstart };
   const out: Wall[] = [];
   toRRule(base.rule, base.dtstart).between(fromD, toD, true, (d) => {
     if (d.getTime() >= toD.getTime()) return false;
@@ -587,7 +634,7 @@ export function previousStart(rule: RuleParts, dtstart: Wall, rid: Wall): Wall |
   const base = denseEnough(rule, dtstart)
     ? rebased(rule, dtstart, { date: back, time: '00:00' })
     : null;
-  if (base) {
+  if (base && base !== 'ended') {
     const near = toRRule(base.rule, base.dtstart).before(toFloating(rid), false);
     if (near) return fromFloating(near);
   }
