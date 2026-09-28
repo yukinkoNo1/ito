@@ -95,4 +95,21 @@ describe('リポジトリの決まり', () => {
     expect(hook).toContain('sortMembersKeepingSame(previous.current');
     expect(hook).not.toMatch(/\.sort\(/);
   });
+
+  it('@ito/core で読み込むだけで効く（副作用のある）モジュールは zod-config.ts だけで、package.json の sideEffects に書いてある（ほかは使わなければ初回表示の JS から外れる。§24 D42）', () => {
+    const pkg = JSON.parse(readFileSync(path.join(repo, 'packages/core/package.json'), 'utf8')) as {
+      sideEffects?: unknown;
+    };
+    expect(pkg.sideEffects).toEqual(['./src/zod-config.ts']);
+    const core = (rel: string) => rel.startsWith('packages/core/src/');
+    // 行の頭にある文で、宣言・import・export・コメント・続きの行でないもの（関数を呼ぶ・代入するなど）
+    const statement =
+      /^(?!(import|export|const|let|var|function|class|interface|type|declare|async|\/\/|\/\*|\*|\s|\}|\)|\]|'|"|`|$))/;
+    expect(
+      offenders(statement, (rel) => !core(rel) || rel === 'packages/core/src/zod-config.ts'),
+    ).toEqual([]);
+    expect(offenders(/^z\.config\(/, (rel) => !core(rel))).toEqual([
+      'packages/core/src/zod-config.ts:6',
+    ]);
+  });
 });
