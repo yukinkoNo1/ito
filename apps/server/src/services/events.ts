@@ -266,6 +266,13 @@ export function updateEvent(
  */
 export function propagateToExceptions(db: DbLike, parent: EventRecord, now: number): void {
   for (const ex of loadExceptions(db, parent.id)) {
+    // 非公開のときに消した「この回だけ変更」は、公開しても家族に渡さない（消した回を家族が戻すと、非公開のときの
+    // 件名・メモが出てしまうため）。例外行ごと消し、その回を戻すとシリーズの中身で出る（総点検 A8）
+    if (ex.deletedAt !== null && ex.visibility === 'private' && parent.visibility === 'family') {
+      db.delete(events).where(eq(events.id, ex.id)).run();
+      recordChange(db, 'event', ex.id, now);
+      continue;
+    }
     if (ex.visibility === parent.visibility && ex.ownerId === parent.ownerId) continue;
     const next: EventRecord = {
       ...ex,

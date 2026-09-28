@@ -9,7 +9,7 @@ import type { Env } from './env';
 import { ApiError, problemResponse } from './errors';
 import { staticFiles } from './lib/static';
 import type { Logger } from './logger';
-import { csrf, protocolVersion } from './middleware/csrf';
+import { csrf, protocolVersion, readBodyFirst } from './middleware/csrf';
 import { hostCheck } from './middleware/host';
 import { identity } from './middleware/identity';
 import { securityHeaders } from './middleware/security-headers';
@@ -113,14 +113,21 @@ export function createApp(deps: AppDeps): App {
   });
 
   // 人の API: プロトコル版 → CSRF → identity。/api/feed/* には掛けない
-  const userChain = every(protocolVersion(), csrf(env.APP_ORIGIN), identity({ env, db, clock }));
+  // 本文は本人を確かめる前に読み切る（本文を待つあいだに変わった権限で動かさない。§24 D39）
+  const userChain = every(
+    protocolVersion(),
+    csrf(env.APP_ORIGIN),
+    readBodyFirst(),
+    identity({ env, db, clock }),
+  );
   app.use('/api/*', async (c, next) => {
     if (isFeedPath(c.req.path)) return next();
     return userChain(c, next);
   });
 
   // 全件同期は大きくなる（1 年分で約 1.4MB）ので gzip で送る（§19 の 1MB は転送量。§24 D38）。
-  // 応答には送り手が入れた秘密（CSRF のトークンなど）を返さないので、圧縮による推測（BREACH）の対象にならない
+  // 本文には見る人の非公開の件名と、ほかの家族が書ける件名が同じ圧縮の窓に入る。圧縮による推測（BREACH）は、
+  // 別のサイトから同期を読ませる要求を作れない（/api/* の GET も X-Ito-Client と same-origin が要る。§14・§24 D39）ことで防ぐ
   app.use('/api/sync', compress({ encoding: 'gzip' }));
 
   registerFeedRoutes(app, deps);

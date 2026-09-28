@@ -23,7 +23,18 @@ export function registerFeedRoutes(app: App, deps: AppDeps): void {
   let lastAuthFailLog = Number.NEGATIVE_INFINITY;
   const lastUserDeviceWarn = new Map<string, number>();
 
+  // まとめた失敗の件数を出す（1 分に 1 回まで。失敗が続いたあと静かになっても、次の要求か 1 分後に出す。総点検 A10）
+  let flushTimer: ReturnType<typeof setTimeout> | null = null;
+  const flushAuthFailures = () => {
+    const now = clock.now();
+    if (authFailures === 0 || now - lastAuthFailLog < AUTH_FAIL_LOG_INTERVAL_MS) return;
+    logger.warn({ failures: authFailures }, 'feed auth failed');
+    authFailures = 0;
+    lastAuthFailLog = now;
+  };
+
   const guard: MiddlewareHandler<AppEnv> = async (c, next) => {
+    flushAuthFailures();
     if (c.req.method !== 'GET' && c.req.method !== 'HEAD') {
       throw new ApiError(405, 'method_not_allowed', undefined, undefined, { Allow: 'GET, HEAD' });
     }
@@ -33,11 +44,13 @@ export function registerFeedRoutes(app: App, deps: AppDeps): void {
     if (!row) {
       // 失敗のログは 1 分に 1 回までにまとめる（件数だけ。キーは出さない）
       authFailures++;
-      const now = clock.now();
-      if (now - lastAuthFailLog >= AUTH_FAIL_LOG_INTERVAL_MS) {
-        logger.warn({ failures: authFailures }, 'feed auth failed');
-        authFailures = 0;
-        lastAuthFailLog = now;
+      flushAuthFailures();
+      if (authFailures > 0 && flushTimer === null) {
+        flushTimer = setTimeout(() => {
+          flushTimer = null;
+          flushAuthFailures();
+        }, AUTH_FAIL_LOG_INTERVAL_MS);
+        flushTimer.unref?.();
       }
       throw new ApiError(401, 'feed_unauthorized', undefined, undefined, {
         'WWW-Authenticate': 'Bearer',

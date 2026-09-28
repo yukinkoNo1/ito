@@ -1,5 +1,5 @@
 # 進み具合
-今: 総点検 / 次にやること: 攻撃者の視点で §14・§18 に照らして洗い出す（サブエージェント）→ 疑わしい点ごとに失敗する再現テスト → 直す → docs/security-review.md → audit → 最終確認（RUNBOOK の最終確認のコマンドと最終報告）
+今: 総点検 / 次にやること: E2E・Docker で確かめる → コミット → docs/security-review.md に修正コミットを書く → audit → 最終確認（RUNBOOK の最終確認のコマンドと最終報告）
 
 ## ステップ
 | ステップ | 状態（未着手・作業中・完了） | タグ | メモ |
@@ -12,7 +12,7 @@
 | Phase 4 通知 | 完了 | phase-4 | レビューの指摘（止めた端末の再購読、まとめ待ちの件名の漏れ、pnpm dev のログアウト、renotify、終日⇔時刻ありの通知 ほか）を直し、修正もレビューして直した（§24 D36） |
 | Phase 5 一言入力 | 完了 | phase-5 | 退避した作業を戻し、Anthropic の呼び出しを公式 SDK にした。レビューの 21 件（high 1・medium 11・low 9）を直した（§24 D37） |
 | Phase 7 仕上げ | 完了 | phase-7 | 空き時間・検索・書き出し・バックアップと掃除・同期と静的の gzip・これからの一覧の範囲・ビルドの検査・性能・security-map。レビューの 16 件を直した（§24 D38） |
-| 総点検 | 未着手 | audit | |
+| 総点検 | 作業中 | audit | 5 つの観点（本人確認・CSRF と XSS と SW・非公開・フィード・入力と秘密とコンテナ）で攻撃の経路を洗い出し、反証できなかった 18 件（高 2・中 5・低 11）を再現テストを書いてから直した（docs/security-review.md、§24 D39） |
 | 最終確認 | 未着手 | — | |
 
 ## 受け入れ基準
@@ -24,7 +24,7 @@
 | Phase 0 | CSRF 4 パターン 403 | middleware.test.ts「CSRF」（X-Ito-Client なし・Content-Type 違い・Origin 不一致/なし・Sec-Fetch-Site: cross-site/same-site） | OK |
 | Phase 0 | Host 不一致 421 | middleware.test.ts「Host が APP_ORIGIN と一致しなければ 421」 | OK |
 | Phase 0 | `/healthz` は Host に関係なく 200（例外はこのパスだけ） | middleware.test.ts「/healthz は Host に関係なく 200」「/healthz ちょうどだけ」 | OK |
-| Phase 0 | GET には CSRF 検査が掛からない | middleware.test.ts「GET には CSRF の検査を掛けない」 | OK |
+| Phase 0 | GET には CSRF 検査が掛からない | middleware.test.ts「ホーム画面・通知から開くとき…のページの遷移（/api の外）には CSRF の検査を掛けない」 | OK（総点検で §14 の 4. を改めた: /api/* の GET も X-Ito-Client と same-origin が要る。ページの遷移には掛けない。§24 D39） |
 | Phase 0 | 本番設定で HOST=0.0.0.0 なら起動失敗・本番で dev モードなら起動失敗 | apps/server/test/env.test.ts | OK |
 | Phase 0 | セキュリティヘッダが全応答に付く・本文 32KB 上限・no-store | middleware.test.ts「ヘッダ・本文の上限」 | OK（421・413 も no-store） |
 | Phase 0 | `docker compose config` が通る | `docker compose config -q` | OK（EXIT=0） |
@@ -146,6 +146,7 @@
 - D35: 通知の細則（この端末の印、送信の記録と再送、まとめ・予告、家族の変更のまとめ待ち、通知の文と url、テスト通知、鍵がないとき、自分への通知の候補と保存、SW の知らせ、E2E の push）
 - D36: Phase 4 のレビューで決めた通知の細則（自分で止めた印、まとめ待ちの件名の見え方と消し方・同じ人だけまとめる・読んだ行だけ片づける、renotify、終日⇔時刻ありの通知と行の書き換え、最初の回の「これ以降」、公開鍵の状態と文言、ready を待たない、翌日 0:00）
 - D38: 仕上げの細則（空き時間は今日から、検索の範囲と並び、書き出しは fetch だけ・JSON と ICS の形、バックアップと掃除の時刻、同期の gzip、これからの一覧は 140 日まで、ビルドの検査）
+- D39: 総点検で決めたこと（/api/* の GET も X-Ito-Client と same-origin、本文を読んでから本人を確かめる・家族の管理は確かめ直す、名前の見えない文字、「これ以降」で公開・非公開にしたときの履歴と消した例外、フィードの人の端末の判定と失敗の WARN、SW の遷移の除外、設置後の確認で連携キーをコマンドラインに書かない）
 - D37: 一言入力の細則（found と reason、先に選んだ日を残す、回数制限はルール解析、AI の出力の検証、公式 SDK・再試行なし、例の作り方、時間帯、重なりの警告、ai:eval）
 
 ## 後で足すテスト
@@ -169,8 +170,9 @@
 
 ## 既知の問題
 - `pnpm audit` で drizzle-kit（マイグレーションを作る開発用の道具）の中の esbuild（<=0.24.2 の開発サーバーの問題。GHSA-67mh-4wv8-2f99）が moderate 1 件。開発用の道具で、バンドル・Docker のイメージに入らず、esbuild を開発サーバーとして動かさないので受け入れる（drizzle-kit の更新で解消する）
+- テストを直したもの（総点検）: server middleware.test.ts の「GET には CSRF の検査を掛けない（クロスサイトの Origin・Sec-Fetch-Site でも 200）」「ホーム画面・通知から開くとき（Sec-Fetch-Site: none、Origin なし）の GET も通る」を、§24 D39 の新しい決まり（/api/* の GET は X-Ito-Client と same-origin が要る・ページの遷移には掛けない）を確かめるテストに書き換えた（前の決まりそのものが A3・A4 の穴だった）。export.test.ts の「X-Ito-Client がない」要求は、テストの send() が GET にも X-Ito-Client を付けるようにしたので、明示して外した（確かめる中身は同じ）。E2E phase2.spec.ts で許すコンソールエラーを、/api/export だけから /api と /%61pi への遷移の 4xx に広げた（A5 で遷移の形を足したため。URL で絞っている）
 - テストを直したもの（Phase 7）: server static.test.ts の /api/export へのページ遷移を 404 から 403 に（経路がなかったときの状態コードを期待していた。確かめたいのは index.html にならないことで、それは変えていない）
-- E2E のコンソールエラー 0 件の確認では、ネットワークを切るテスト（オフライン・API 遮断・競合・ログアウトのあとのオフライン）と /api/export への遷移のテストに限り、Chromium が自分で出す「Failed to load resource」のうち、意図して失敗させた /api/ への要求のもの（net::ERR_INTERNET_DISCONNECTED / net::ERR_FAILED / status of 409 / /api/export の 4xx）だけを許している（URL で絞る。アプリシェル・アイコンなどの失敗やアプリのエラーは許さない。e2e/fixtures.ts の allowedConsoleErrors）
+- E2E のコンソールエラー 0 件の確認では、ネットワークを切るテスト（オフライン・API 遮断・競合・ログアウトのあとのオフライン）と /api/export への遷移のテストに限り、Chromium が自分で出す「Failed to load resource」のうち、意図して失敗させた /api/ への要求のもの（net::ERR_INTERNET_DISCONNECTED / net::ERR_FAILED / status of 409 / /api/*・/%61pi/* へのページ遷移の 4xx）だけを許している（URL で絞る。アプリシェル・アイコンなどの失敗やアプリのエラーは許さない。e2e/fixtures.ts の allowedConsoleErrors）
 - E2E を `--repeat-each` で繰り返すと、同じサーバーに同じ件名の予定が残るため 2 回目から件名の重複で落ちる（1 回目はすべて通る。E2E のサーバーは実行のたびに空の DB で始まる。retries は 0）
 - vite-plugin-pwa 1.3 が Vite 8 で「inlineDynamicImports option is deprecated」の警告を出す（ビルドは成功する。プラグイン側の問題）
 - E2E の phase6.spec.ts は、ギャラリーと本番のスクリーンショットの比較を、見本の予定を変えるテスト（予定の追加・時刻の直し）より先に置いている（同じファイルの中で書いた順に走る。workers: 1）

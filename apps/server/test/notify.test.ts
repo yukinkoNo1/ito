@@ -1,13 +1,17 @@
+import { createECDH, randomBytes } from 'node:crypto';
 import { type EventDTO, fromJst, type PushPayload } from '@ito/core';
 import { eq } from 'drizzle-orm';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import webpush from 'web-push';
 import { events, notificationLog, pendingNotices, pushSubscriptions } from '../src/db/schema';
 import {
   classifyStatus,
+  type PushFetch,
   type PushOptions,
   type PushResult,
   type PushSender,
   type PushTarget,
+  webPushSender,
 } from '../src/services/push-sender';
 import { createScheduler, type Scheduler } from '../src/services/scheduler';
 import { allDay, as, createEvent, IDS, patchEvent, seedFamily, timed, type Who } from './family';
@@ -34,7 +38,7 @@ class FakeSender implements PushSender {
   }
 }
 
-const endpointOf = (who: Who) => `https://push.example.com/send/${who}`;
+const endpointOf = (who: Who) => `https://fcm.googleapis.com/fcm/send/${who}`;
 const P256DH = `B${'A'.repeat(86)}`;
 const AUTH = 'AAAAAAAAAAAAAAAAAAAAAA';
 
@@ -822,3 +826,127 @@ function subscriptionOf(who: Who) {
     .where(eq(pushSubscriptions.endpoint, endpointOf(who)))
     .get();
 }
+
+describe('送信の締め切り（総点検 B2）', () => {
+  it('返ってこない送信があっても、1 回の実行は締め切りで終わり、ほかの家族の通知は届く', async () => {
+    // ゆきの端末への送信だけ、いつまでも返ってこない（少しずつ返し続ける相手など）
+    const hanging: PushSender = {
+      send: (target, payload, options) =>
+        target.endpoint === endpointOf('yuki')
+          ? new Promise<PushResult>(() => {})
+          : sender.send(target, payload, options),
+    };
+    const s = createScheduler({
+      db: ctx.database.db,
+      clock: ctx.clock,
+      sender: hanging,
+      logger: ctx.logger,
+      sendDeadlineMs: 50,
+    });
+    await make('yuki', timed('2026-09-28', '10:00', null, { title: '塾', memberIds: [IDS.yuki] }));
+    await make('papa', timed('2026-09-28', '10:00', null, { title: '会議' }));
+    at('2026-09-28', '09:30');
+    await s.tick();
+    expect(sender.to('papa').map((x) => x.payload.title)).toEqual(['会議']);
+    // 次の実行も止まらない（前の実行が終わっている）
+    at('2026-09-28', '09:31');
+    await s.tick();
+    await s.stop();
+    // ゆきの端末は 2 回とも締め切りで retry（10 分以内なので次の実行でも送り直す）
+    expect(subscriptionOf('yuki')?.failCount).toBe(2);
+  });
+
+  it('本物の送り手: 要求の全体に締め切りを掛け、応答の本文は読まずに捨て、リダイレクトはたどらない', async () => {
+    const vapid = webpush.generateVAPIDKeys();
+    const ecdh = createECDH('prime256v1');
+    ecdh.generateKeys();
+    const target = {
+      endpoint: 'https://fcm.googleapis.com/fcm/send/abc',
+      p256dh: ecdh.getPublicKey().toString('base64url'),
+      auth: randomBytes(16).toString('base64url'),
+    };
+    const keys = { ...vapid, subject: 'mailto:admin@example.com' };
+    const payload: PushPayload = { v: 1, kind: 'test', title: 't', body: 'b', url: '/', tag: 't' };
+    const options: PushOptions = { TTL: 60, urgency: 'high' };
+    const seen: { url: string; init: Parameters<PushFetch>[1] }[] = [];
+
+    // 少しずつ返し続けて終わらない相手: 締め切り（50ms）で retry
+    const slow = webPushSender(keys, 50, (url, init) => {
+      seen.push({ url, init });
+      return new Promise((_, reject) => {
+        init.signal.addEventListener('abort', () => reject(init.signal.reason));
+      });
+    });
+    const t0 = performance.now();
+    expect(await slow.send(target, payload, options)).toEqual({ kind: 'retry', status: null });
+    expect(performance.now() - t0).toBeLessThan(2000);
+    const req = seen[0];
+    expect(req?.url).toBe(target.endpoint);
+    expect(req?.init.method).toBe('POST');
+    expect(req?.init.redirect).toBe('manual');
+    expect(req?.init.headers['Content-Encoding']).toBe('aes128gcm');
+    expect(req?.init.headers.TTL).toBe('60');
+    expect(req?.init.headers.Urgency).toBe('high');
+    expect(req?.init.headers.Authorization).toMatch(/^vapid t=.+, k=.+$/);
+    expect(req?.init.body?.byteLength).toBeGreaterThan(0);
+
+    // 大きな本文を返す相手: 本文は読まずに捨てる
+    let cancelled = 0;
+    const big = webPushSender(keys, 1000, async () => ({
+      status: 201,
+      body: {
+        cancel: async () => {
+          cancelled++;
+        },
+      },
+    }));
+    expect(await big.send(target, payload, options)).toEqual({ kind: 'ok' });
+    expect(cancelled).toBe(1);
+
+    // リダイレクトはたどらない（届いたことにしない）
+    const redirect = webPushSender(keys, 1000, async () => ({ status: 302, body: null }));
+    expect(await redirect.send(target, payload, options)).toEqual({ kind: 'fail', status: 302 });
+  });
+});
+
+describe('購読の数と送り先（総点検 B4）', () => {
+  const post = (who: Who, endpoint: string) =>
+    send(ctx, 'POST', '/api/push/subscriptions', {
+      headers: as(who),
+      body: { endpoint, keys: { p256dh: P256DH, auth: AUTH } },
+    });
+
+  it('1 人の購読は 10 台まで（11 台目は 409 device_limit。同じ endpoint の登録し直しは数えない）', async () => {
+    // beforeEach でゆきは 1 台登録している
+    for (let i = 2; i <= 10; i++) {
+      const res = await post('yuki', `https://fcm.googleapis.com/fcm/send/yuki-${i}`);
+      expect([i, res.status]).toEqual([i, 200]);
+    }
+    const over = await post('yuki', 'https://fcm.googleapis.com/fcm/send/yuki-11');
+    expect(over.status).toBe(409);
+    expect(((await over.json()) as { code: string }).code).toBe('device_limit');
+    expect((await post('yuki', endpointOf('yuki'))).status).toBe(200);
+    // ほかの家族の端末を引き継ぐときも数える
+    expect((await post('yuki', endpointOf('haru'))).status).toBe(409);
+    // ほかの家族は影響を受けない
+    expect((await post('haru', 'https://fcm.googleapis.com/fcm/send/haru-2')).status).toBe(200);
+  });
+
+  it('送り先はプッシュサービスだけ（家の LAN・任意のサーバーは 422。行を作らない）', async () => {
+    for (const endpoint of [
+      'https://10.255.255.1/x',
+      'https://192.168.1.1/x',
+      'https://127.0.0.1:8787/api/me',
+      'https://attacker.example/x',
+    ]) {
+      const res = await post('yuki', endpoint);
+      expect([endpoint, res.status]).toEqual([endpoint, 422]);
+    }
+    const rows = ctx.database.db
+      .select()
+      .from(pushSubscriptions)
+      .where(eq(pushSubscriptions.memberId, IDS.yuki))
+      .all();
+    expect(rows.map((r) => r.endpoint)).toEqual([endpointOf('yuki')]);
+  });
+});

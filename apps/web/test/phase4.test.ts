@@ -16,6 +16,7 @@ import { homeNoticeKind } from '../src/pwa/home-notice';
 import {
   base64UrlToBytes,
   checkPushSubscription,
+  ENABLE_MESSAGES,
   enablePush,
   forgetPublicKey,
   notificationPermission,
@@ -97,6 +98,8 @@ function fakeEnv(opts: {
   answer?: NotificationPermission;
   existing?: boolean;
   status?: number;
+  /** 購読の登録の応答の本文（既定は { id: 'sub-1' }） */
+  body?: unknown;
   /** 公開鍵の応答（既定は鍵あり。null＝家のサーバーに鍵がない、'error'＝通信の失敗） */
   publicKey?: string | null | 'error';
 }) {
@@ -157,7 +160,7 @@ function fakeEnv(opts: {
       }
       return {
         status: opts.status ?? 200,
-        body: { id: 'sub-1' },
+        body: opts.body ?? { id: 'sub-1' },
         headers: new Headers(),
       } as ApiResponse;
     },
@@ -230,6 +233,17 @@ describe('購読（§15）', () => {
     const disabled = fakeEnv({ publicKey: null });
     expect(await enablePush(UNKNOWN_KEY, disabled.env)).toBe('unavailable');
     expect(disabled.log).not.toContain('subscribe:65');
+  });
+
+  it('端末の数の上限（409 device_limit）・プッシュサービスでない送り先（422）は、理由の分かる結果にする（総点検 B4）', async () => {
+    const many = fakeEnv({ status: 409, body: { code: 'device_limit' } });
+    expect(await enablePush(READY, many.env)).toBe('too_many');
+    expect(ENABLE_MESSAGES.too_many).toContain('10 台まで');
+    const odd = fakeEnv({ status: 422, body: { code: 'validation' } });
+    expect(await enablePush(READY, odd.env)).toBe('unsupported');
+    const broken = fakeEnv({ status: 500, body: { code: 'internal' } });
+    expect(await enablePush(READY, broken.env)).toBe('failed');
+    expect(readDevice(PUSH_SUBSCRIPTION_KEY)).toBeNull();
   });
 
   it('ログアウト・この端末の削除のあとは、起動・前面復帰で購読し直さない。「通知をオンにする」でだけ戻る', async () => {

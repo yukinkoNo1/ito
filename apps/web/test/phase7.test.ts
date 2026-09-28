@@ -2,6 +2,7 @@ import { addDays, fromJst } from '@ito/core';
 import { describe, expect, it } from 'vitest';
 import type { Fetcher } from '../src/data/api';
 import { downloadExport, fileNameOf } from '../src/pwa/export';
+import { isDeniedNavigation } from '../src/pwa/nav-denylist';
 import { splitLinks } from '../src/ui/labels';
 import { buildFreeTimeVM } from '../src/viewmodels/free';
 import type { VmContext } from '../src/viewmodels/occurrence';
@@ -321,5 +322,41 @@ describe('これからの一覧の範囲（§19。§24 D38）', () => {
     const r = extendFlowRange({ from: '2026-09-27', to: addDays(limit, -2) }, 'end', false, today);
     expect(r.to).toBe(limit);
     expect(extendFlowRange(r, 'end', false, today).to).toBe(limit);
+  });
+});
+
+describe('SW のページ遷移の除外（§17・§18 T3。総点検 A5）', () => {
+  it('/api・/healthz はクエリ付き・/api ちょうど・エンコードした形も index.html にしない', () => {
+    for (const path of [
+      '/api/export?format=json',
+      '/api',
+      '/api?x=1',
+      '/API/export',
+      '/%61pi/export?format=json',
+      '/api%2Fexport',
+      '/healthz',
+      '/healthz?probe=1',
+    ]) {
+      expect([path, isDeniedNavigation(new URL(path, 'https://ito.example.ts.net'))]).toEqual([
+        path,
+        true,
+      ]);
+    }
+  });
+
+  it('アプリの画面への遷移は index.html を返す（クエリに % があってもよい）', () => {
+    for (const path of [
+      '/',
+      '/month/2026-10',
+      '/day/2026-10-01',
+      '/search?q=%E3%81%82',
+      '/apiary',
+      '/healthzz',
+    ]) {
+      expect([path, isDeniedNavigation(new URL(path, 'https://ito.example.ts.net'))]).toEqual([
+        path,
+        false,
+      ]);
+    }
   });
 });

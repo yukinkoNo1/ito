@@ -30,9 +30,18 @@ export function resolveLogin(c: Context, env: Env): string | null {
  * （DEV_LOGIN の既定の本人は数えない。RUNBOOK 3.）。
  */
 export function isFromUserDevice(c: Context, env: Env): boolean {
-  if (env.AUTH_MODE === 'dev') return Boolean(c.req.header('x-dev-login')?.trim());
-  return Boolean(c.req.header('tailscale-user-login')?.trim());
+  // 値が空でも、ID ヘッダが付いていれば人の端末とみなす（安全側。総点検 A11）
+  const has = (name: string) => c.req.header(name) !== undefined;
+  if (TAILSCALE_ID_HEADERS.some(has)) return true;
+  return env.AUTH_MODE === 'dev' && has('x-dev-login');
 }
+
+/** Serve が人の端末からの要求に付ける ID ヘッダ */
+const TAILSCALE_ID_HEADERS = [
+  'tailscale-user-login',
+  'tailscale-user-name',
+  'tailscale-user-profile-pic',
+];
 
 export interface IdentityDeps {
   env: Env;

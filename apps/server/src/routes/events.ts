@@ -30,6 +30,11 @@ const restoreQuerySchema = z.object({ recurrenceId: recurrenceIdSchema.optional(
 
 /** 1 メンバーの予定作成 60 件/分（§18 T10） */
 const CREATE_RATE_PER_MIN = 60;
+/**
+ * 1 メンバーの予定の変更・削除・復元 120 件/分（§18 T10）。「これ以降」は新しいシリーズを、「この回だけ」は
+ * 例外行を作るので、作成と同じく数える（総点検 B3。§24 D39）
+ */
+const WRITE_RATE_PER_MIN = 120;
 
 function respond(c: Context<AppEnv>, r: StoredResponse): Response {
   const isProblem =
@@ -52,6 +57,16 @@ function eventIdParam(c: Context<AppEnv>): string {
 export function registerEventRoutes(app: App, deps: AppDeps): void {
   const { db, clock } = deps;
   const createLimiter = new RateLimiter(CREATE_RATE_PER_MIN, 60 * 1000, clock);
+  const writeLimiter = new RateLimiter(WRITE_RATE_PER_MIN, 60 * 1000, clock);
+  // 回数を超えたら 429（Idempotency-Key の再送は数えない。withIdempotency の中で数える）
+  const limit = (limiter: RateLimiter, memberId: string) => {
+    const limited = limiter.hit(memberId);
+    if (!limited.ok) {
+      throw new ApiError(429, 'rate_limited', undefined, undefined, {
+        'Retry-After': String(limited.retryAfterSec),
+      });
+    }
+  };
 
   app.post('/api/events', async (c) => {
     const me = c.get('me');
@@ -59,12 +74,7 @@ export function registerEventRoutes(app: App, deps: AppDeps): void {
     if (!key) throw new ApiError(400, 'idempotency_key_required');
     const input = await parseBody(c, eventCreateSchema);
     const result = withIdempotency(db, clock, me.id, key, (tx) => {
-      const limited = createLimiter.hit(me.id);
-      if (!limited.ok) {
-        throw new ApiError(429, 'rate_limited', undefined, undefined, {
-          'Retry-After': String(limited.retryAfterSec),
-        });
-      }
+      limit(createLimiter, me.id);
       return createEvent(tx, clock, me, input);
     });
     return respond(c, result);
@@ -76,6 +86,7 @@ export function registerEventRoutes(app: App, deps: AppDeps): void {
     const key = parseIdempotencyKey(c);
     const patch = await parseBody(c, eventPatchSchema);
     const result = withIdempotency(db, clock, me.id, key, (tx) => {
+      limit(writeLimiter, me.id);
       const ifMatch = parseIfMatch(c);
       return updateEvent(tx, clock, me, id, ifMatch, patch);
     });
@@ -91,6 +102,7 @@ export function registerEventRoutes(app: App, deps: AppDeps): void {
       recurrenceId: c.req.query('recurrenceId'),
     });
     const result = withIdempotency(db, clock, me.id, key, (tx) => {
+      limit(writeLimiter, me.id);
       const ifMatch = parseIfMatch(c);
       return deleteEvent(tx, clock, me, id, ifMatch, q.scope, q.recurrenceId ?? null);
     });
@@ -109,9 +121,10 @@ export function registerEventRoutes(app: App, deps: AppDeps): void {
     const id = eventIdParam(c);
     const key = parseIdempotencyKey(c);
     const rid = parseWith(restoreQuerySchema, { recurrenceId: c.req.query('recurrenceId') });
-    const result = withIdempotency(db, clock, me.id, key, (tx) =>
-      restoreEvent(tx, clock, me, id, rid.recurrenceId ?? null),
-    );
+    const result = withIdempotency(db, clock, me.id, key, (tx) => {
+      limit(writeLimiter, me.id);
+      return restoreEvent(tx, clock, me, id, rid.recurrenceId ?? null);
+    });
     return respond(c, result);
   });
 

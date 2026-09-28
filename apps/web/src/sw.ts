@@ -5,6 +5,7 @@ import {
   precacheAndRoute,
 } from 'workbox-precaching';
 import { NavigationRoute, registerRoute } from 'workbox-routing';
+import { NAV_DENYLIST } from './pwa/nav-denylist';
 import { clickTarget, planNotification, readPushData } from './pwa/push-payload';
 
 declare const self: ServiceWorkerGlobalScope & {
@@ -15,11 +16,10 @@ declare const self: ServiceWorkerGlobalScope & {
 precacheAndRoute(self.__WB_MANIFEST);
 cleanupOutdatedCaches();
 
-// ナビゲーションはキャッシュした index.html を返す。/api/ と /healthz は除外（/api/* はキャッシュしない）
+// ナビゲーションはキャッシュした index.html を返す。/api と /healthz（クエリ付き・エンコードした形も）は除外
+// （/api/* はキャッシュしない）
 registerRoute(
-  new NavigationRoute(createHandlerBoundToURL('/index.html'), {
-    denylist: [/^\/api\//, /^\/healthz$/],
-  }),
+  new NavigationRoute(createHandlerBoundToURL('/index.html'), { denylist: NAV_DENYLIST }),
 );
 
 // 「更新」を押したら待機中の SW に切り替える

@@ -308,10 +308,10 @@ test.describe('競合', () => {
 });
 
 test.describe('SW を通らない遷移', () => {
-  // /api/export は家族のアプリからの要求ではない（X-Ito-Client がない）ので 4xx になる。その 1 件だけ許す
+  // /api/* へのページ遷移は家族のアプリからの要求ではない（X-Ito-Client がない）ので 4xx になる。それだけ許す
   test.use({
     allowedConsoleErrors: {
-      patterns: [/status of 4\d\d .*\(http:\/\/localhost:8788\/api\/export/],
+      patterns: [/status of 4\d\d .*\(http:\/\/localhost:8788\/(?:api|%61pi)(?:[/?)])/],
     },
   });
 
@@ -320,7 +320,14 @@ test.describe('SW を通らない遷移', () => {
   }) => {
     await page.goto('/');
     await underServiceWorker(page);
-    for (const path of ['/api/export?format=json', '/healthz']) {
+    // クエリ付き・/api ちょうど・エンコードした形（サーバーは /%61pi を /api と読む）も（総点検 A5）
+    for (const path of [
+      '/api/export?format=json',
+      '/healthz',
+      '/healthz?probe=1',
+      '/api',
+      '/%61pi/export?format=json',
+    ]) {
       const res = await page.goto(path);
       expect(res, path).not.toBeNull();
       expect(res?.fromServiceWorker(), path).toBe(false);

@@ -203,18 +203,33 @@ describe('CSRF（SPEC §14）', () => {
     expect(res.status).toBe(403);
   });
 
-  it('GET には CSRF の検査を掛けない（クロスサイトの Origin・Sec-Fetch-Site でも 200）', async () => {
+  it('/api/* の GET も、アプリからの要求（X-Ito-Client あり・Sec-Fetch-Site があれば same-origin）だけ（総点検 A3・A4。§24 D39）', async () => {
     const h = authed();
-    const res = await send(ctx, 'GET', '/api/me', {
-      headers: { ...h, origin: 'https://evil.example', 'sec-fetch-site': 'cross-site' },
+    // アプリの fetch（同じオリジン）は通る。Origin は GET では見ない
+    const ok = await send(ctx, 'GET', '/api/me', {
+      headers: { ...h, 'sec-fetch-site': 'same-origin' },
     });
-    expect(res.status).toBe(200);
+    expect(ok.status).toBe(200);
+    const overrides: Record<string, string>[] = [
+      { 'x-ito-client': '' },
+      { origin: 'https://evil.example', 'sec-fetch-site': 'cross-site' },
+      { 'sec-fetch-site': 'same-site' },
+      { 'sec-fetch-site': 'none' },
+    ];
+    for (const over of overrides) {
+      const res = await send(ctx, 'GET', '/api/me', { headers: { ...h, ...over } });
+      expect([over, res.status]).toEqual([over, 403]);
+      expect(((await res.json()) as { code: string }).code).toBe('csrf');
+    }
   });
 
-  it('ホーム画面・通知から開くとき（Sec-Fetch-Site: none、Origin なし）の GET も通る', async () => {
+  it('ホーム画面・通知から開くとき（Sec-Fetch-Site: none、Origin なし）のページの遷移（/api の外）には CSRF の検査を掛けない', async () => {
     const h = authed();
-    const res = await send(ctx, 'GET', '/api/me', { headers: { ...h, 'sec-fetch-site': 'none' } });
-    expect(res.status).toBe(200);
+    const res = await send(ctx, 'GET', '/month/2026-10', {
+      headers: { ...h, 'sec-fetch-site': 'none', 'x-ito-client': '' },
+    });
+    // 静的配信のないテストのアプリなので 404（403 csrf にならない）
+    expect(res.status).toBe(404);
   });
 
   it('対応しないプロトコル版は 426 client_outdated', async () => {

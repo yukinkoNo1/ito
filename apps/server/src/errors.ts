@@ -28,6 +28,7 @@ const TITLES: Record<string, string> = {
   feed_unauthorized: '連携キーが正しくありません',
   feed_user_device: '人の端末からは表示用フィードを読めません',
   push_unavailable: '通知の設定がされていません',
+  device_limit: '通知を受け取る端末の数の上限に達しています',
   internal: 'サーバーでエラーが起きました',
 };
 

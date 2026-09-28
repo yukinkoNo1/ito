@@ -18,13 +18,32 @@ export const pushPayloadSchema = z
 
 const base64url = z.string().regex(/^[A-Za-z0-9_-]+={0,2}$/, '形式が正しくありません');
 
+/**
+ * 受け付けるプッシュサービス（ブラウザが返す endpoint の先。§15）。家の LAN や任意のサーバーを送り先にさせない
+ * （通知のたびにサーバーから要求が出るため。総点検 B4）: FCM（Chrome・Android）、Apple（Safari・iPhone）、
+ * Mozilla（Firefox）、WNS（Edge）
+ */
+const PUSH_SERVICE_HOSTS = [
+  /^fcm\.googleapis\.com$/,
+  /^android\.googleapis\.com$/,
+  /^(?:[a-z0-9-]+\.)*push\.apple\.com$/,
+  /^(?:[a-z0-9-]+\.)*push\.services\.mozilla\.com$/,
+  /^(?:[a-z0-9-]+\.)*notify\.windows\.com$/,
+];
+
+export function isPushServiceEndpoint(endpoint: string): boolean {
+  const m = /^https:\/\/([A-Za-z0-9.-]+)\/[!-~]*$/.exec(endpoint);
+  const host = m?.[1]?.toLowerCase();
+  return host !== undefined && PUSH_SERVICE_HOSTS.some((re) => re.test(host));
+}
+
 export const pushSubscriptionInputSchema = z
   .object({
     endpoint: z
       .string()
       .max(2048)
-      // https の URL だけ（空白・制御文字を含まない。ホストのあとにパスがある）
-      .regex(/^https:\/\/[A-Za-z0-9.-]+(:\d+)?\/[!-~]*$/, 'https の URL だけ受け付けます'),
+      // プッシュサービスの https の URL だけ（ポートの指定なし・空白や制御文字を含まない・ホストのあとにパスがある）
+      .refine(isPushServiceEndpoint, 'プッシュサービスの URL だけ受け付けます'),
     keys: z
       .object({ p256dh: base64url.min(16).max(200), auth: base64url.min(8).max(100) })
       .strict(),

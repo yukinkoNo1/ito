@@ -49,7 +49,7 @@ import { countUnread } from './activity';
 import { noticeSummary, noticeTitle } from './family-notices';
 import { listActiveMembers, listAllMembers } from './members';
 import { listSubscriptionsOf, markDelivered, markFailed, removeGone } from './push';
-import type { PushOptions, PushSender } from './push-sender';
+import type { PushOptions, PushResult, PushSender } from './push-sender';
 import { loadActiveEvents, loadEventsByIds } from './records';
 
 /**
@@ -63,6 +63,24 @@ export interface NotifierDeps {
   clock: Clock;
   sender: PushSender | null;
   logger: Logger;
+  /** 1 回の送信の締め切り（ミリ秒。既定は SEND_DEADLINE_MS。テストで短くする） */
+  sendDeadlineMs?: number;
+}
+
+/**
+ * 1 回の送信の締め切り。送り手が返ってこなくても、ほかの家族の通知・バックアップ・掃除を止めない（総点検 B2）。
+ * 本物の送り手は要求の全体に 10 秒の締め切りを掛けているので、ここは念のための外側の締め切り
+ */
+export const SEND_DEADLINE_MS = 15_000;
+
+function withDeadline(p: Promise<PushResult>, ms: number): Promise<PushResult> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const late = new Promise<PushResult>((resolve) => {
+    timer = setTimeout(() => resolve({ kind: 'retry', status: null }), ms);
+    timer.unref?.();
+  });
+  const settled = p.catch((): PushResult => ({ kind: 'retry', status: null }));
+  return Promise.race([settled, late]).finally(() => clearTimeout(timer));
 }
 
 export type DeliveryOutcome = 'sent' | 'gone' | 'retry' | 'failed' | 'none';
@@ -98,8 +116,15 @@ export async function deliver(
   let sent = 0;
   let gone = 0;
   let retry = 0;
-  for (const s of subs) {
-    const result = await sender.send(s, body, options);
+  // 端末ごとに同時に送り、それぞれに締め切りを掛ける（1 台が遅くても 1 人分の時間は締め切りまで）
+  const deadline = deps.sendDeadlineMs ?? SEND_DEADLINE_MS;
+  const results = await Promise.all(
+    subs.map(async (s) => ({
+      s,
+      result: await withDeadline(sender.send(s, body, options), deadline),
+    })),
+  );
+  for (const { s, result } of results) {
     switch (result.kind) {
       case 'ok':
         markDelivered(db, s.id, clock.now());

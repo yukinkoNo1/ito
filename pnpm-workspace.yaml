@@ -10,3 +10,11 @@ onlyBuiltDependencies:
 # pnpm 10 は binding.gyp を見て node-gyp を走らせてしまうので、ビルドスクリプトを動かさない
 ignoredBuiltDependencies:
   - better-sqlite3
+
+# 依存の監査（SPEC §18 T13）は開発用の依存も含めた `pnpm audit` で行う（サーバーと SW のバンドルに入るパッケージは
+# devDependencies にあるため。総点検 B6）。受け入れたものだけをここで外す:
+# - GHSA-67mh-4wv8-2f99: drizzle-kit（マイグレーションを作る開発用の道具）の中の esbuild の開発サーバーの問題。
+#   バンドル・Docker のイメージに入らず、esbuild を開発サーバーとして動かさない（docs/PROGRESS.md の既知の問題）
+auditConfig:
+  ignoreGhsas:
+    - GHSA-67mh-4wv8-2f99

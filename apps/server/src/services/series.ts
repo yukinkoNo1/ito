@@ -26,7 +26,7 @@ import type { DbLike } from '../db/client';
 import { events, type MemberRow } from '../db/schema';
 import { ApiError } from '../errors';
 import { validationError } from '../lib/validate';
-import { describeDiff, memberNames, recordActivity } from './activity';
+import { describeDiff, hideActivityOf, memberNames, recordActivity } from './activity';
 import { insertRecord, loadExceptions, recordChange, updateRecord } from './records';
 import { copyReminderPrefs } from './reminders';
 
@@ -201,6 +201,9 @@ export function updateThisOccurrence(
   };
 }
 
+/** 1 つの繰り返しで取り消せる回の数（作るときの exdates の上限と同じ。§13） */
+export const MAX_EXDATES = 1000;
+
 /** 「この回だけ削除」: 親の exdates に足す（その回の例外行はゴミ箱へ） */
 export function deleteThisOccurrence(
   db: DbLike,
@@ -226,6 +229,12 @@ export function deleteThisOccurrence(
     recordChange(db, 'event', exception.id, now);
   }
   const exdates = [...new Set([...master.exdates, rid])].sort();
+  // 取り消した回は作るときと同じく 1000 回まで（行が際限なく大きくならないように。総点検 B3）
+  if (exdates.length > MAX_EXDATES) {
+    throw validationError([
+      { field: 'recurrenceId', message: `この繰り返しで取り消せる回は ${MAX_EXDATES} 回までです` },
+    ]);
+  }
   const next = bumpMaster(db, me, master, now, { exdates });
   recordActivity(db, clock, me.id, 'delete', base, [`${ridLabel(rid)} の回だけ`]);
   return { status: 200, body: { event: projectEvent(next, me.id) } };
@@ -346,10 +355,23 @@ export function updateFollowing(
   copyReminderPrefs(db, master.id, id);
   recordActivity(db, clock, me.id, 'update', head, [`${ridLabel(rid)} 以降を別の予定に分けた`]);
   // 何を変えたかは新しいシリーズの行に（見える人は新しいシリーズの公開・非公開に従う）
-  recordActivity(db, clock, me.id, 'create', created, [
-    `${ridLabel(rid)} 以降を変更`,
-    ...describeDiff(tailBase, created, memberNames(db)),
-  ]);
+  const diff = [`${ridLabel(rid)} 以降を変更`, ...describeDiff(tailBase, created, memberNames(db))];
+  if (master.visibility === 'private' && created.visibility === 'family') {
+    // 非公開だったときの件名・場所などを家族に見せない（T5。scope=all と同じ。総点検 A7）:
+    // 全部の差分は持ち主だけの行に、家族には「公開した」だけ
+    recordActivity(db, clock, me.id, 'create', { ...created, visibility: 'private' }, diff);
+    recordActivity(db, clock, me.id, 'create', created, [
+      `${ridLabel(rid)} 以降を変更`,
+      '家族に公開した',
+    ]);
+  } else {
+    // 家族の繰り返しの「これ以降」を非公開にしたら、それまでの履歴もほかの家族から見えなくする
+    // （回ごとの履歴はシリーズの ID に付くので、シリーズの履歴をまとめて持ち主だけにする。安全側。§24 D27・総点検 A9）
+    if (master.visibility === 'family' && created.visibility === 'private') {
+      hideActivityOf(db, master.id, master.ownerId);
+    }
+    recordActivity(db, clock, me.id, 'create', created, diff);
+  }
   return {
     status: 200,
     body: {

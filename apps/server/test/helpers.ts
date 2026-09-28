@@ -86,7 +86,7 @@ export function createTestContext(
 export interface RequestOptions {
   headers?: Record<string, string>;
   body?: unknown;
-  /** 既定では CSRF を通るヘッダ（X-Ito-Client・Content-Type・Origin・Sec-Fetch-Site）を付ける */
+  /** 既定では CSRF を通るヘッダ（X-Ito-Client・Content-Type・Origin・Sec-Fetch-Site。GET は X-Ito-Client だけ）を付ける */
   csrf?: boolean;
   host?: string;
 }
@@ -100,6 +100,8 @@ export async function send(
 ): Promise<Response> {
   const headers: Record<string, string> = { host: opts.host ?? ctx.env.APP_HOST };
   const stateChanging = !['GET', 'HEAD', 'OPTIONS'].includes(method);
+  // アプリ（PWA）は /api/* の GET にも X-Ito-Client を付ける（§24 D39）
+  if (!stateChanging && opts.csrf !== false) headers['x-ito-client'] = '1';
   if (stateChanging && opts.csrf !== false) {
     headers['x-ito-client'] = '1';
     headers['content-type'] = 'application/json';

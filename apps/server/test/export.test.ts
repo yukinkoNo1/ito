@@ -191,7 +191,9 @@ describe('書き出し', () => {
   });
 
   it('アプリからの fetch だけ: X-Ito-Client がない・ページ遷移・別のサイトからは 403。知らない形式は 422', async () => {
-    let res = await send(ctx, 'GET', '/api/export?format=json', { headers: as('papa') });
+    let res = await send(ctx, 'GET', '/api/export?format=json', {
+      headers: { ...as('papa'), 'x-ito-client': '' },
+    });
     expect(res.status).toBe(403);
     res = await send(ctx, 'GET', '/api/export?format=json', {
       headers: {

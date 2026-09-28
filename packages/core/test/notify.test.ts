@@ -202,4 +202,37 @@ describe('ペイロード（§15）', () => {
         .success,
     ).toBe(false);
   });
+
+  it('送り先はプッシュサービスのホストだけ（家の LAN・任意のサーバー・ポートの指定は 422。総点検 B4）', () => {
+    const keys = { p256dh: `B${'A'.repeat(86)}`, auth: 'A'.repeat(22) };
+    for (const endpoint of [
+      'https://fcm.googleapis.com/fcm/send/x',
+      'https://android.googleapis.com/gcm/send/x',
+      'https://web.push.apple.com/QG',
+      'https://api.push.apple.com/3/device/x',
+      'https://updates.push.services.mozilla.com/wpush/v2/x',
+      'https://wns2-bn3p.notify.windows.com/w/?token=x',
+      'https://FCM.googleapis.com/fcm/send/x',
+    ]) {
+      expect([endpoint, pushSubscriptionInputSchema.safeParse({ endpoint, keys }).success]).toEqual(
+        [endpoint, true],
+      );
+    }
+    for (const endpoint of [
+      'https://10.0.0.1/x',
+      'https://127.0.0.1/x',
+      'https://192.168.1.1/x',
+      'https://169.254.169.254/latest',
+      'https://attacker.example/x',
+      'https://ito.tail1234.ts.net/api/me',
+      'https://fcm.googleapis.com:8443/fcm/send/x',
+      'https://fcm.googleapis.com.evil.example/x',
+      'https://evilpush.apple.com/x',
+      'https://push.apple.com.evil.example/x',
+    ]) {
+      expect([endpoint, pushSubscriptionInputSchema.safeParse({ endpoint, keys }).success]).toEqual(
+        [endpoint, false],
+      );
+    }
+  });
 });

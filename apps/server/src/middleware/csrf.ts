@@ -25,14 +25,25 @@ export function protocolVersion(): MiddlewareHandler {
 }
 
 /**
- * CSRF の検査（SPEC §14）。状態を変える要求（GET・HEAD・OPTIONS 以外）だけに掛ける。
+ * CSRF の検査（SPEC §14）。人の API（/api/*。/api/feed/* を除く）に掛ける。
  * 1. X-Ito-Client と Content-Type: application/json が必須（クロスサイトではプリフライトが要り、CORS を許可しないので失敗する）
  * 2. Origin が APP_ORIGIN と一致しなければ 403。Sec-Fetch-Site があれば same-origin 以外は 403
  * （3. Host の検査は host.ts で全要求に掛けている）
+ * GET・HEAD も、アプリからの要求（X-Ito-Client あり・Sec-Fetch-Site があれば same-origin）だけにする。
+ * クロスサイトのページから重い全件同期を何度も作らせない・圧縮した応答の長さを測らせないため（総点検 A3・A4。§24 D39）。
+ * ページの遷移（/api の外）には掛からない
  */
 export function csrf(appOrigin: string): MiddlewareHandler {
   return async (c, next) => {
-    if (!isStateChanging(c.req.method)) return next();
+    if (!isStateChanging(c.req.method)) {
+      if (!c.req.header('x-ito-client'))
+        throw new ApiError(403, 'csrf', 'X-Ito-Client がありません');
+      const site = c.req.header('sec-fetch-site');
+      if (site !== undefined && site !== 'same-origin') {
+        throw new ApiError(403, 'csrf', 'Sec-Fetch-Site が same-origin ではありません');
+      }
+      return next();
+    }
     if (!c.req.header('x-ito-client')) throw new ApiError(403, 'csrf', 'X-Ito-Client がありません');
     const contentType = c.req.header('content-type') ?? '';
     if (!/^application\/json\s*(;|$)/i.test(contentType)) {
@@ -45,6 +56,18 @@ export function csrf(appOrigin: string): MiddlewareHandler {
     if (site !== undefined && site !== 'same-origin') {
       throw new ApiError(403, 'csrf', 'Sec-Fetch-Site が same-origin ではありません');
     }
+    return next();
+  };
+}
+
+/**
+ * 状態を変える要求の本文を、本人と権限を確かめる前に読み切る（総点検 A1・A2。§24 D39）。
+ * 本文をあとから送って要求を開いたままにし、そのあいだに無効化・降格されても、前の権限で書き込ませないため。
+ * 本文の上限（32KB）は全体の bodyLimit が効く
+ */
+export function readBodyFirst(): MiddlewareHandler {
+  return async (c, next) => {
+    if (isStateChanging(c.req.method)) await c.req.arrayBuffer();
     return next();
   };
 }

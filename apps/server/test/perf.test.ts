@@ -1,8 +1,9 @@
 import { addDays, type EventRecord, fromJst, uuidv7 } from '@ito/core';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { createFeedToken } from '../src/services/feed-tokens';
+import { dueReminders } from '../src/services/notifier';
 import { insertRecord } from '../src/services/records';
-import { as, IDS, seedFamily } from './family';
+import { as, createEvent, IDS, seedFamily } from './family';
 import { createTestContext, devEnv, send, type TestContext } from './helpers';
 
 /**
@@ -146,5 +147,48 @@ describe('性能（§19）', () => {
     const etag = res.headers.get('etag') as string;
     const again = await get({ 'if-none-match': etag });
     expect(again.status).toBe(304);
+  });
+
+  it('1970 年に始まる毎日の繰り返しを 60 件作られても、表示用フィードと通知の計算は 200ms 未満。回の出ない規則は 422（総点検 B1）', async () => {
+    for (let i = 0; i < 60; i++) {
+      const { res } = await createEvent(ctx, 'yuki', {
+        title: `毎日 ${i}`,
+        allDay: i % 2 === 0,
+        ...(i % 2 === 0 ? { startDate: '1970-01-01' } : { startAt: '1970-01-01T07:30:00+09:00' }),
+        rrule: i % 3 === 0 ? 'FREQ=DAILY' : 'FREQ=DAILY;BYDAY=MO,WE,FR',
+        memberIds: [IDS.yuki],
+      });
+      expect(res.status).toBe(201);
+    }
+    for (const rrule of [
+      'FREQ=MONTHLY;BYMONTH=2;BYMONTHDAY=30,31',
+      'FREQ=YEARLY;BYMONTH=2;BYMONTHDAY=31',
+    ]) {
+      // ゆきは 1 分に 60 件の上限に達しているので、お母さんで試す
+      const { res } = await createEvent(ctx, 'mama', {
+        title: '回の出ない規則',
+        allDay: true,
+        startDate: '1970-01-01',
+        rrule,
+        memberIds: [IDS.mama],
+      });
+      expect([rrule, res.status]).toEqual([rrule, 422]);
+    }
+    const { token } = createFeedToken(ctx.database.db, ctx.clock, 'いえボード');
+    const get = () =>
+      send(ctx, 'GET', '/api/feed/display?days=3', {
+        csrf: false,
+        headers: { authorization: `Bearer ${token}` },
+      });
+    await get();
+    const t0 = performance.now();
+    const res = await get();
+    const feedMs = performance.now() - t0;
+    expect(res.status).toBe(200);
+    // 直す前は 1 件およそ 35ms（2 万日を歩く）× 60 件
+    expect(feedMs).toBeLessThan(200);
+    const t1 = performance.now();
+    dueReminders(ctx.database.db, ctx.clock.now());
+    expect(performance.now() - t1).toBeLessThan(200);
   });
 });

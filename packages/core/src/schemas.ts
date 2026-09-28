@@ -8,7 +8,7 @@ import {
   memberMarkSchema,
   memberNameSchema,
 } from './members';
-import { graphemeLength, normalizeText } from './text';
+import { graphemeLength, normalizeText, withinGraphemes } from './text';
 
 /* ───────── 基本 ───────── */
 
@@ -72,7 +72,7 @@ const titleSchema = z
   .string()
   .transform(normalizeText)
   .refine((v) => graphemeLength(v) >= 1, '件名を入れてください')
-  .refine((v) => graphemeLength(v) <= 100, '件名は 100 文字までにしてください');
+  .refine((v) => withinGraphemes(v, 100), '件名は 100 文字までにしてください');
 
 /** 空文字は null にする */
 const optionalText = (max: number, label: string) =>
@@ -85,7 +85,7 @@ const optionalText = (max: number, label: string) =>
       return t === '' ? null : t;
     })
     .refine(
-      (v) => v === null || graphemeLength(v) <= max,
+      (v) => v === null || withinGraphemes(v, max),
       `${label}は ${max} 文字までにしてください`,
     );
 

@@ -15,6 +15,9 @@ import { ApiError } from '../errors';
  * 1 つの endpoint は 1 人のもの（同じ端末を別の家族が使い始めたら、持ち主を付け替える）
  */
 
+/** 1 人が通知を受け取れる端末の数（通知のたびに端末の数だけ送るので、増やし続けられないようにする。総点検 B4） */
+export const MAX_DEVICES_PER_MEMBER = 10;
+
 export function upsertSubscription(
   db: DbLike,
   clock: Clock,
@@ -28,6 +31,13 @@ export function upsertSubscription(
     .where(eq(pushSubscriptions.endpoint, input.endpoint))
     .get();
   const label = input.label ?? existing?.label ?? 'この端末';
+  if (existing?.memberId !== me.id && countSubscriptions(db, me.id) >= MAX_DEVICES_PER_MEMBER) {
+    throw new ApiError(
+      409,
+      'device_limit',
+      `通知を受け取る端末は 1 人 ${MAX_DEVICES_PER_MEMBER} 台までです`,
+    );
+  }
   if (existing) {
     const next = {
       memberId: me.id,

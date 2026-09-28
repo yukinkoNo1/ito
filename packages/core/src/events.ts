@@ -7,7 +7,7 @@ import {
   toIsoJst,
   toJstParts,
 } from './jst';
-import { formatRrule, parseRrule, untilDate, untilFor } from './recurrence';
+import { formatRrule, parseRrule, ruleDensityError, untilDate, untilFor } from './recurrence';
 import type { EventChanges, EventCreate, EventDTO, Visibility } from './schemas';
 
 /** サーバー内部の予定の形（時刻は epoch ミリ秒。§10） */
@@ -256,15 +256,21 @@ function finalize(
     if (!parsed.ok) errors.push({ field: 'rrule', message: parsed.message });
     else {
       const rule = parsed.rule;
+      const first = startDate ?? (startAt === null ? null : toJstParts(startAt).date);
       if (rule.until !== null) {
         const untilDay = untilDate(rule.until);
         rule.until = untilFor(untilDay, raw.allDay);
-        const first = startDate ?? (startAt === null ? null : toJstParts(startAt).date);
         if (first && untilDay < first)
           errors.push({
             field: 'rrule',
             message: '繰り返しの終わりは始まりの日より後にしてください',
           });
+      }
+      // 回が出ない・まれにしか出ない規則は、展開のたびに rrule が長く空回りするので拒む（総点検 B1。§24 D39）
+      if (first) {
+        const time = startAt === null ? '00:00' : toJstParts(startAt).time;
+        const dense = ruleDensityError(rule, { date: first, time });
+        if (dense) errors.push({ field: 'rrule', message: dense });
       }
       rrule = formatRrule(rule);
     }

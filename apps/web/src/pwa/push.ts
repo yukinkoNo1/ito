@@ -123,7 +123,14 @@ export function forgetPublicKey(): void {
   cachedKey = null;
 }
 
-async function register(env: PushEnv, sub: PushSubscriptionLike): Promise<boolean> {
+/**
+ * 購読を家のサーバーに登録する。端末の数の上限（409 device_limit）と、プッシュサービスでない送り先（422）を
+ * 分けて返す（§15。総点検 B4）
+ */
+async function register(
+  env: PushEnv,
+  sub: PushSubscriptionLike,
+): Promise<'ok' | 'too_many' | 'unsupported' | 'failed'> {
   const json = sub.toJSON();
   const res = await env.request('POST', '/api/push/subscriptions', {
     body: { endpoint: json.endpoint ?? sub.endpoint, keys: json.keys ?? {}, label: deviceLabel() },
@@ -131,12 +138,21 @@ async function register(env: PushEnv, sub: PushSubscriptionLike): Promise<boolea
   const id = (res.body as { id?: unknown } | null)?.id;
   if (res.status === 200 && typeof id === 'string') {
     writeDevice(PUSH_SUBSCRIPTION_KEY, id);
-    return true;
+    return 'ok';
   }
-  return false;
+  if (res.status === 409 && (res.body as { code?: unknown } | null)?.code === 'device_limit') {
+    return 'too_many';
+  }
+  return res.status === 422 ? 'unsupported' : 'failed';
 }
 
-export type EnableResult = 'enabled' | 'denied' | 'unsupported' | 'unavailable' | 'failed';
+export type EnableResult =
+  | 'enabled'
+  | 'denied'
+  | 'unsupported'
+  | 'unavailable'
+  | 'too_many'
+  | 'failed';
 
 /** 「通知をオンにする」の結果の文（設定とホームの案内で同じ。家のサーバーに鍵がないと通信の失敗を分ける） */
 export const ENABLE_MESSAGES: Record<EnableResult, string> = {
@@ -144,6 +160,8 @@ export const ENABLE_MESSAGES: Record<EnableResult, string> = {
   denied: '通知が許可されませんでした。端末の設定で許可できます',
   unsupported: 'この端末やブラウザでは通知を使えません',
   unavailable: '家のサーバーで通知の設定がされていません',
+  too_many:
+    '通知を受け取る端末は 1 人 10 台までです。設定の「通知を受け取る端末」から使っていない端末を止めてください',
   failed: '通知をオンにできませんでした。しばらくしてからやり直してください',
 };
 
@@ -173,7 +191,8 @@ export async function enablePush(
         userVisibleOnly: true,
         applicationServerKey: base64UrlToBytes(key.key),
       }));
-    return (await register(env, sub)) ? 'enabled' : 'failed';
+    const registered = await register(env, sub);
+    return registered === 'ok' ? 'enabled' : registered;
   } catch {
     return 'failed';
   }

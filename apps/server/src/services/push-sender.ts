@@ -41,15 +41,33 @@ export function classifyStatus(status: number | null): PushResult {
   return { kind: 'fail', status };
 }
 
+export type PushFetch = (
+  url: string,
+  init: {
+    method: string;
+    headers: Record<string, string>;
+    body: Uint8Array | null;
+    redirect: 'manual';
+    signal: AbortSignal;
+  },
+) => Promise<{ status: number; body: { cancel(): Promise<void> } | null }>;
+
 /**
- * 本物の送信（web-push。RFC 8291 の aes128gcm で暗号化し、VAPID で署名する）。
+ * 本物の送信（web-push で RFC 8291 の aes128gcm に暗号化し、VAPID で署名した要求を作り、fetch で送る）。
+ * - 締め切りは要求の全体に掛ける（web-push の timeout は無通信の時間なので、少しずつ返す相手には効かない。総点検 B2）
+ * - 応答の本文は読まずに捨てる（大きな本文を溜めない）。リダイレクトはたどらない
  * エラーの本文や endpoint はログに出さない（呼び出し側は状態コードだけを見る）
  */
-export function webPushSender(keys: VapidKeys, timeoutMs = 10_000): PushSender {
+export function webPushSender(
+  keys: VapidKeys,
+  timeoutMs = 10_000,
+  fetcher: PushFetch = (url, init) => fetch(url, init),
+): PushSender {
   return {
     async send(target, payload, options) {
+      let details: ReturnType<typeof webpush.generateRequestDetails>;
       try {
-        const res = await webpush.sendNotification(
+        details = webpush.generateRequestDetails(
           { endpoint: target.endpoint, keys: { p256dh: target.p256dh, auth: target.auth } },
           JSON.stringify(payload),
           {
@@ -57,16 +75,28 @@ export function webPushSender(keys: VapidKeys, timeoutMs = 10_000): PushSender {
             TTL: options.TTL,
             urgency: options.urgency,
             contentEncoding: 'aes128gcm',
-            timeout: timeoutMs,
           },
         );
-        return classifyStatus(res.statusCode);
-      } catch (e) {
-        const status =
-          e instanceof webpush.WebPushError && typeof e.statusCode === 'number'
-            ? e.statusCode
-            : null;
-        return classifyStatus(status);
+      } catch {
+        return classifyStatus(null);
+      }
+      const headers: Record<string, string> = {};
+      for (const [name, value] of Object.entries(details.headers)) {
+        // 長さは fetch が本文から付ける
+        if (name.toLowerCase() !== 'content-length') headers[name] = String(value);
+      }
+      try {
+        const res = await fetcher(details.endpoint, {
+          method: details.method,
+          headers,
+          body: details.body ? new Uint8Array(details.body) : null,
+          redirect: 'manual',
+          signal: AbortSignal.timeout(timeoutMs),
+        });
+        await res.body?.cancel().catch(() => {});
+        return classifyStatus(res.status);
+      } catch {
+        return classifyStatus(null);
       }
     },
   };

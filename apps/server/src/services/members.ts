@@ -5,6 +5,7 @@ import {
   type MemberColor,
   normalizeLogin,
   normalizeText,
+  removeHiddenCharacters,
   truncateGraphemes,
   uuidv7,
 } from '@ito/core';
@@ -96,7 +97,11 @@ export function autoRegisterAdmin(
     if (active.length >= maxMembers) return null;
     const normalizedLogin = normalizeLogin(login);
     const fallback = normalizedLogin.split('@')[0] ?? normalizedLogin;
-    const base = normalizeText(displayName ?? '') || fallback || 'メンバー';
+    // 表示名の見えない文字・制御文字は除く（総点検 A6）
+    const base =
+      normalizeText(removeHiddenCharacters(displayName ?? '')) ||
+      normalizeText(removeHiddenCharacters(fallback)) ||
+      'メンバー';
     const name = uniqueName(base, new Set(active.map((m) => m.name)));
     const color = firstFreeColor(new Set(active.map((m) => m.color)));
     if (!color) return null;

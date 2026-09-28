@@ -108,7 +108,7 @@ test('設定: 通知を受け取る端末の一覧から止められる。テス
   request,
 }) => {
   const res = await api(request, 'papa', 'POST', '/api/push/subscriptions', {
-    endpoint: 'https://push.example.com/e2e/papa-android',
+    endpoint: 'https://fcm.googleapis.com/fcm/send/e2e-papa-android',
     keys,
     label: 'Android',
   });
@@ -127,7 +127,7 @@ test('設定: 通知を受け取る端末の一覧から止められる。テス
 
 test('家族の管理: この人の端末の通知を止める', async ({ page, request }) => {
   const res = await api(request, 'mama', 'POST', '/api/push/subscriptions', {
-    endpoint: 'https://push.example.com/e2e/mama-iphone',
+    endpoint: 'https://web.push.apple.com/e2e-mama-iphone',
     keys,
     label: 'iPhone',
   });
