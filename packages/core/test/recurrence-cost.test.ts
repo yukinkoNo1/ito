@@ -601,9 +601,9 @@ describe('総点検のレビュー（4 回目）F1・F2: 繰り返しの上限�
       return p.rule;
     });
     const window = [wall('2026-09-28'), wall('2026-10-01')] as const;
-    rules.forEach((rule, i) => r.ruleStarts(rule, starts[i] as Wall, ...window));
+    for (const [i, rule] of rules.entries()) r.ruleStarts(rule, starts[i] as Wall, ...window);
     const t0 = performance.now();
-    rules.forEach((rule, i) => r.ruleStarts(rule, starts[i] as Wall, ...window));
+    for (const [i, rule] of rules.entries()) r.ruleStarts(rule, starts[i] as Wall, ...window);
     expect(performance.now() - t0).toBeLessThan(300);
   }, 30_000);
 
@@ -616,10 +616,10 @@ describe('総点検のレビュー（4 回目）F1・F2: 繰り返しの上限�
       return p.rule;
     });
     const window = [wall('2026-09-28'), wall('2026-10-01')] as const;
-    rules.forEach((rule, i) => r.ruleStarts(rule, starts[i] as Wall, ...window));
+    for (const [i, rule] of rules.entries()) r.ruleStarts(rule, starts[i] as Wall, ...window);
     const before = r.recurrenceWorkForTest().probes;
     const t0 = performance.now();
-    rules.forEach((rule, i) => r.ruleStarts(rule, starts[i] as Wall, ...window));
+    for (const [i, rule] of rules.entries()) r.ruleStarts(rule, starts[i] as Wall, ...window);
     expect(r.recurrenceWorkForTest().probes - before).toBe(0);
     expect(performance.now() - t0).toBeLessThan(300);
   }, 30_000);
