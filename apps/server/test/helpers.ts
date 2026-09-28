@@ -5,6 +5,7 @@ import { type App, createApp, type PushDeps } from '../src/app';
 import { type Database_, openDatabase, runMigrations } from '../src/db/client';
 import { type Env, loadEnv } from '../src/env';
 import { createLogger, type Logger } from '../src/logger';
+import type { AiClient } from '../src/services/ai-client';
 
 export const MIGRATIONS_DIR = fileURLToPath(new URL('../drizzle', import.meta.url));
 
@@ -62,7 +63,7 @@ export interface TestContext {
 
 export function createTestContext(
   env: Env,
-  opts: { now?: number; staticDir?: string | null; push?: PushDeps } = {},
+  opts: { now?: number; staticDir?: string | null; push?: PushDeps; ai?: AiClient | null } = {},
 ): TestContext {
   const database = openDatabase(':memory:');
   runMigrations(database.db, MIGRATIONS_DIR);
@@ -77,6 +78,7 @@ export function createTestContext(
     logger,
     staticDir: opts.staticDir ?? null,
     ...(opts.push ? { push: opts.push } : {}),
+    ...(opts.ai ? { ai: opts.ai } : {}),
   });
   return { app, env, database, clock, logs, logger, close: () => database.close() };
 }

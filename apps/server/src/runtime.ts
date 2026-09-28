@@ -7,6 +7,7 @@ import { type App, createApp, type PushDeps } from './app';
 import { type Database_, openDatabase, runMigrations } from './db/client';
 import type { Env } from './env';
 import type { Logger } from './logger';
+import type { AiClient } from './services/ai-client';
 
 export interface RuntimePaths {
   migrationsDir: string;
@@ -35,7 +36,11 @@ export async function startServer(
   clock: Clock,
   logger: Logger,
   paths: RuntimePaths,
-  extras: { jobs?: (deps: { database: Database_ }) => Stoppable[]; push?: PushDeps } = {},
+  extras: {
+    jobs?: (deps: { database: Database_ }) => Stoppable[];
+    push?: PushDeps;
+    ai?: AiClient | null;
+  } = {},
 ): Promise<RunningServer> {
   if (env.DATABASE_PATH !== ':memory:') {
     mkdirSync(path.dirname(path.resolve(env.DATABASE_PATH)), { recursive: true });
@@ -52,6 +57,7 @@ export async function startServer(
     logger,
     staticDir,
     ...(extras.push ? { push: extras.push } : {}),
+    ...(extras.ai ? { ai: extras.ai } : {}),
   });
 
   const jobs = extras.jobs?.({ database }) ?? [];

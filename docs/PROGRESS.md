@@ -10,7 +10,7 @@
 | Phase 6 UI 統合 | 完了 | phase-6 | Phase 2 の次に行った（§24 D15）。レビューの指摘（シートのスワイプ、テーマの監視の漏れ、自分の非公開の候補、書く画面の日時の範囲、トースト・案内、履歴・ゴミ箱の状態、人の札が 7 個以上、日付をまたぐ行、検査の範囲 ほか）を直した |
 | Phase 3 繰り返し | 完了 | phase-3 | レビューの指摘（件名だけ直してもシリーズが動く、C-04 の件数とサーバーの食い違い、リセットした例外の復活、毎月の規則のずれ、回が出ない規則、pnpm dev が rrule の読み込みで起動しない、回の送信待ちの 409 ほか）を直した（§24 D34） |
 | Phase 4 通知 | 完了 | phase-4 | レビューの指摘（止めた端末の再購読、まとめ待ちの件名の漏れ、pnpm dev のログアウト、renotify、終日⇔時刻ありの通知 ほか）を直し、修正もレビューして直した（§24 D36） |
-| Phase 5 一言入力 | 未着手 | phase-5 | |
+| Phase 5 一言入力 | 作業中 | phase-5 | 退避した作業を戻し、Anthropic の呼び出しを公式 SDK にした（§24 D37） |
 | Phase 7 仕上げ | 未着手 | phase-7 | |
 | 総点検 | 未着手 | audit | |
 | 最終確認 | 未着手 | — | |
@@ -99,6 +99,14 @@
 | Phase 4 | 実機確認の手順を README に | README「通知（Web Push。SPEC §15）」の「実機での確認の手順」 | OK（実機での確認は「要確認」） |
 | Phase 4 | レビューの指摘（§24 D36） | web phase4.test.ts「ログアウト・この端末の削除のあとは…」「購読を確かめているあいだに止めたら…」「画面を開いたときに鍵が取れていなければ…」「書く画面: 終日⇔時刻ありを切り替えたら…」「送れていない自分への通知があるうちは…」、logout.test.ts、phase3.test.ts「最初の回の「これ以降すべて」の変更は…」、server notify.test.ts「2 分以内に非公開にしたら…」「担当から外したら…」「送る前に…」「別の人の変更は…」「送っているあいだに…」「「この回だけ」の変更は…」「シリーズ全体を変えても…」「送信の結果の扱い」（5 件）、core「offsetLabel」（翌日 0:00）、E2E phase4.spec.ts「書く画面の自分への通知」2 件 | OK |
 | Phase 4 | `pnpm check`・`pnpm test:e2e`・`docker compose build`・`up -d --wait` | 修正後（Node 24.21.0）: `pnpm check`（Vitest 462 件）、`pnpm test:e2e`（47 件）、`docker compose build`・`up -d --wait`・`exec app node dist/cli.js feed-token list`・`down`。修正前: `pnpm check`（Vitest 444 件）、`pnpm test:e2e`（45 件）、`docker compose build`・`up -d --wait`（healthz 200、ログに push disabled が出ない＝鍵で push が有効）・`down` | OK（すべて EXIT=0） |
+| Phase 5 | ルール解析 38 件（§21 の表） | core test/nlp-rules.test.ts（fixtures/nlp-cases.ts。偽の時計 2026-09-27 14:18） | OK |
+| Phase 5 | AI 応答の差し替え（正常・形の不正・refusal・max_tokens・タイムアウト・HTTP エラー → ルール解析へ） | server test/parse.test.ts「POST /api/parse」「Anthropic の呼び出し」（公式 SDK の fetch を差し替え。タイムアウトは SDK が止める） | OK |
+| Phase 5 | 入力文がログ・DB・エラー応答に残らない | server parse.test.ts「入力文はログ・DB・エラー応答に残らない」 | OK |
+| Phase 5 | スキーマの member_keys は m1〜mN（実名を入れない）、送るのは入力文・日付表・呼び名だけ、大文字小文字を無視 | server parse.test.ts | OK |
+| Phase 5 | 日本語入力の変換確定の Enter で送信しない | E2E phase5.spec.ts「日本語入力の変換確定の Enter（isComposing・keyCode 229）では確認へ進まない」 | OK |
+| Phase 5 | 一言で書いて保存 → これから・月に出る（§21 の E2E） | E2E phase5.spec.ts「一言（ルール解析）で書いて保存すると…」（入力バー → 一言 → 保存） | OK |
+| Phase 5 | 重なりの警告（他人の非公開は「予定あり」） | web test/phase5.test.ts「重なりの警告」 | OK |
+| Phase 6 | §6.2「一言を書いて保存」の手数 | E2E phase5.spec.ts（入力バーを押す → 一言を書く → 「…に保存」を押す。タップは 2 回） | OK（Phase 5 で確認） |
 | Phase 6 | `pnpm check`・`pnpm test:e2e`・`pnpm build`・`docker compose build` | `pnpm check`（261 件）、`pnpm test:e2e`（39 件）、`pnpm build`、`docker compose build` | OK（すべて EXIT=0） |
 
 ## 決めたこと（SPEC §24 に書いたもの）
@@ -124,9 +132,10 @@
 - D34: Phase 3 のレビューで決めた繰り返しの細則（差分だけを送る、消える件数の共通の計算、破棄した例外行は消す、毎月の規則の移動、RRULE の並びと比べ方、この回だけ変更の元に戻す、回の送信待ちの 409・404、「この予定だけ」の制限、保存したあとの回へ移る、rrule の ESM）
 - D35: 通知の細則（この端末の印、送信の記録と再送、まとめ・予告、家族の変更のまとめ待ち、通知の文と url、テスト通知、鍵がないとき、自分への通知の候補と保存、SW の知らせ、E2E の push）
 - D36: Phase 4 のレビューで決めた通知の細則（自分で止めた印、まとめ待ちの件名の見え方と消し方・同じ人だけまとめる・読んだ行だけ片づける、renotify、終日⇔時刻ありの通知と行の書き換え、最初の回の「これ以降」、公開鍵の状態と文言、ready を待たない、翌日 0:00）
+- D37: 一言入力の細則（found と reason、先に選んだ日を残す、回数制限はルール解析、AI の出力の検証、公式 SDK・再試行なし、例の作り方、時間帯、重なりの警告、ai:eval）
 
 ## 後で足すテスト
-- 非公開の漏えい（まだない経路）: 書き出し（JSON・ICS。Phase 7）、一言入力の重なりの警告（Phase 5。端末内で作るので他人の非公開は「予定あり」になることを確かめる）、検索（Phase 7。端末内の DB を検索する）
+- 非公開の漏えい（まだない経路）: 書き出し（JSON・ICS。Phase 7）、検索（Phase 7。端末内の DB を検索する）。一言入力の重なりの警告は Phase 5 で足した（web phase5.test.ts）
 - T7 のビルド成果物の検査（sk-ant）に「X-Dev-Login」「ito.devLogin」「表示する状態」「__gallery」を足す（Phase 7）
 - これからの一覧の範囲を、見ている日の前後 8 週に削る（今は広げるだけ。§19 の性能の確認と合わせて Phase 7）
 

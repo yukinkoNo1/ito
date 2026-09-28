@@ -235,3 +235,19 @@ export const pendingNotices = sqliteTable(
 );
 
 export type PendingNoticeRow = typeof pendingNotices.$inferSelect;
+
+/** 一言入力の AI の回数制限と費用の把握（§10・§16）。入力文は保存しない */
+export const aiUsage = sqliteTable(
+  'ai_usage',
+  {
+    id: text('id').primaryKey(),
+    memberId: text('member_id').notNull(),
+    createdAt: integer('created_at').notNull(),
+    ok: integer('ok', { mode: 'boolean' }).notNull(),
+    source: text('source').notNull(),
+    latencyMs: integer('latency_ms').notNull(),
+    inputTokens: integer('input_tokens').notNull().default(0),
+    outputTokens: integer('output_tokens').notNull().default(0),
+  },
+  (t) => [index('ai_usage_member').on(t.memberId, t.createdAt)],
+);

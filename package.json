@@ -18,7 +18,8 @@
     "db:generate": "pnpm --filter @ito/server run db:generate",
     "db:migrate": "pnpm --filter @ito/server run db:migrate",
     "seed": "pnpm --filter @ito/server run seed",
-    "feed-token": "pnpm --filter @ito/server run --silent cli feed-token"
+    "feed-token": "pnpm --filter @ito/server run --silent cli feed-token",
+    "ai:eval": "pnpm --filter @ito/server run --silent ai:eval"
   },
   "devDependencies": {
     "@axe-core/playwright": "4.13.0",

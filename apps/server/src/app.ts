@@ -16,7 +16,9 @@ import { registerEventRoutes } from './routes/events';
 import { registerFeedRoutes } from './routes/feed';
 import { registerMeRoutes } from './routes/me';
 import { registerMemberRoutes } from './routes/members';
+import { registerParseRoutes } from './routes/parse';
 import { registerPushRoutes } from './routes/push';
+import type { AiClient } from './services/ai-client';
 import { countSubscriptions } from './services/push';
 import type { PushSender } from './services/push-sender';
 import type { AppEnv } from './types';
@@ -33,6 +35,8 @@ export interface AppDeps {
   staticDir: string | null;
   /** Web Push（VAPID の鍵がなければ publicKey・sender とも null。§15） */
   push?: PushDeps;
+  /** 一言入力の AI（ANTHROPIC_API_KEY がなければ null。§16） */
+  ai?: AiClient | null;
 }
 
 export interface PushDeps {
@@ -118,6 +122,7 @@ export function createApp(deps: AppDeps): App {
   registerEventRoutes(app, deps);
   registerMemberRoutes(app, deps, (memberId) => countSubscriptions(db, memberId));
   registerPushRoutes(app, { ...deps, push: deps.push ?? { publicKey: null, sender: null } });
+  registerParseRoutes(app, { ...deps, ai: deps.ai ?? null });
 
   if (deps.staticDir) app.use('*', staticFiles(deps.staticDir));
 

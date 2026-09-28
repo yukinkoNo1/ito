@@ -43,7 +43,7 @@ test.beforeEach(async ({ request }) => {
 
 test('繰り返しを書いて、この予定だけ・これ以降すべて・すべてで直す', async ({ page, request }) => {
   test.setTimeout(60_000);
-  const T = 'E2E 月曜の練習';
+  const T = 'E2E ピアノの練習';
   // 書く画面の「くわしく」で毎週・10 回
   await page.goto('/');
   await composerTrigger(page).click();
@@ -115,7 +115,7 @@ test('繰り返しを書いて、この予定だけ・これ以降すべて・�
     .click();
 
   // すべて: 後の回（3/27）から時刻を変えても、前の回（3/13）は消えずに同じだけずれる
-  detail = await openOccurrence(page, '2028-03-27', /E2E 月曜の練習（新）/);
+  detail = await openOccurrence(page, '2028-03-27', /E2E ピアノの練習（新）/);
   await detail.getByRole('button', { name: /^日時/ }).click();
   await page
     .getByRole('dialog', { name: '日時を直す' })

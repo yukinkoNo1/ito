@@ -4,6 +4,7 @@ export * from './holidays';
 export * from './ids';
 export * from './jst';
 export * from './members';
+export * from './nlp/rules';
 export * from './notify';
 export * from './occurrences';
 export * from './push';

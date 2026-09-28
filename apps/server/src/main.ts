@@ -5,6 +5,7 @@ import { systemClock } from '@ito/core';
 import { EnvError, loadEnv } from './env';
 import { createLogger } from './logger';
 import { startServer } from './runtime';
+import { anthropicClient } from './services/ai-client';
 import { vapidKeysFrom, webPushSender } from './services/push-sender';
 import { createScheduler } from './services/scheduler';
 
@@ -36,6 +37,14 @@ async function main(): Promise<void> {
     },
     {
       push: { publicKey: vapid?.publicKey ?? null, sender },
+      // 一言入力の AI（鍵がなければルール解析だけ。§16）
+      ai: env.ANTHROPIC_API_KEY
+        ? anthropicClient({
+            apiKey: env.ANTHROPIC_API_KEY,
+            model: env.ANTHROPIC_MODEL,
+            timeoutMs: env.AI_TIMEOUT_MS,
+          })
+        : null,
       // スケジューラ（1 分ごと。§15）。shutdown で止める
       jobs: ({ database }) => {
         const scheduler = createScheduler({ db: database.db, clock: systemClock, sender, logger });

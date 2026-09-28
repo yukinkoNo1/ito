@@ -1,17 +1,27 @@
 import type { MeDTO, ReminderPrefDTO } from '@ito/core';
 import { useEffect, useState } from 'react';
-import { useData, useEvents, useSyncState } from '../../app/data-context';
+import { useData, useEvents, useMe, useMembers, useSyncState } from '../../app/data-context';
 import { useMemberVMs, useOffline } from '../../app/hooks';
 import { useNav } from '../../app/nav';
 import { useToast } from '../../app/toast';
 import { useVmContext } from '../../app/use-vm';
+import { apiRequest } from '../../data/api';
 import type { LocalEvent } from '../../data/db';
 import EventComposerSheet from '../../ui/sheets/EventComposerSheet';
 import { RecurrenceScopeDialog } from '../../ui/sheets/EventDetailSheet';
-import type { ComposerVM, EventDraftVM } from '../../ui/types';
+import type { AmbiguityVM, ComposerVM, EventDraftVM } from '../../ui/types';
 import { applyDraftPatch } from '../../viewmodels/composer';
 import { buildComposerVM, monthEndQuestion } from '../../viewmodels/composer-vm';
 import { draftToInput, emptyDraft, eventToDraft } from '../../viewmodels/detail';
+import {
+  nlpContext,
+  nlpToPatch,
+  overlapsFor,
+  parseLocally,
+  parseResponseSchema,
+  toAmbiguityVM,
+  visibleAmbiguities,
+} from '../../viewmodels/nlp';
 import {
   draftDefaults,
   followReminders,
@@ -50,22 +60,44 @@ interface ComposerState {
   reminderPrefAllDay: boolean;
   /** 本人の既定値（§15 の設定） */
   reminderDefaults: { timedDefaults: number[]; allDayDefaults: number[] };
+  /** 一言の解析（§16）: 確認へ進んだか・解析のもと（ai／かんたん解析）・曖昧さ */
+  parse: ComposerVM['parse'];
+  source: ComposerVM['source'];
+  ambiguities: AmbiguityVM[];
+  /** 札で選んだ項目（一言を書き直しても上書きしない） */
+  touched: string[];
+}
+
+/** 一言の解析の待ち時間の上限（サーバーの AI は 6 秒。通信の分を足す） */
+const PARSE_TIMEOUT_MS = 10_000;
+
+/** 解析の結果のうち、札で選んだ項目は上書きしない（件名は一言から） */
+function withoutTouched(
+  patch: Partial<EventDraftVM>,
+  touched: readonly string[],
+): Partial<EventDraftVM> {
+  const out: Record<string, unknown> = { ...patch };
+  for (const k of touched) if (k !== 'title') delete out[k];
+  return out as Partial<EventDraftVM>;
 }
 
 /**
  * S-05 予定を書く。入力バー・日の見出しの「＋」・月の日・詳細の「編集」「複製」から開く（`?compose=1`）。
- * 一言の解析（F-22 の曖昧さ・重なり）は Phase 5 でつなぐ。それまでは一言をそのまま件名にする
+ * 一言は書いているあいだ端末のルール解析で札に反映し、「確認へ」（Enter）で POST /api/parse の結果に置き換えて、
+ * 曖昧さの質問と重なりの警告を出す。オフライン・失敗のときはルール解析のまま（かんたん解析。§16）
  */
 export function ComposerContainer() {
   const nav = useNav();
   const params = nav.composer;
-  const { db, store } = useData();
+  const { db, store, clock } = useData();
   const ctx = useVmContext();
   const events = useEvents();
   const members = useMemberVMs();
   const toast = useToast();
   const sync = useSyncState();
   const offline = useOffline();
+  const me = useMe();
+  const allMembers = useMembers();
   const [state, setState] = useState<ComposerState | null>(null);
   const key = params ? JSON.stringify(params) : null;
   // ctx は毎分変わるので、開いたとき・開き方が変わったときだけ下書きを作る（今日と自分の ID だけを見る）
@@ -105,13 +137,22 @@ export function ComposerContainer() {
         allDayDefaults: [],
       };
       const reminderPref = editing && source ? prefOf(prefs, source.id) : undefined;
+      // 入力バーから一言を持って開いたら、ルール解析で札に反映する（§16）
+      const members = await db.members.toArray();
+      const parsed =
+        !source && text && me ? parseLocally(text, nlpContext(me, members, clock.now())) : null;
+      const withText = parsed ? { ...made, ...nlpToPatch(parsed.draft, parsed.found, made) } : made;
+      // 本人の行はシリーズ・予定そのものの行なので、種類も回ではなくシリーズ・予定のもの。種類が違えば既定値
+      const reminderPrefAllDay = source ? source.allDay : made.allDay;
       const draft = {
-        ...made,
-        myReminders: reminderPref ?? draftDefaults(made, meId, reminderDefaults),
+        ...withText,
+        myReminders:
+          (withText.allDay === reminderPrefAllDay ? reminderPref : undefined) ??
+          draftDefaults(withText, meId, reminderDefaults),
       };
       setState({
         key,
-        text: draft.title,
+        text: text ?? draft.title,
         draft,
         mode: more ? 'detail' : 'quick',
         busyTouched: Boolean(source),
@@ -122,15 +163,18 @@ export function ComposerContainer() {
         askScope: false,
         remindersTouched: false,
         reminderPref,
-        // 本人の行はシリーズ・予定そのものの行なので、種類も回ではなくシリーズ・予定のもの
-        reminderPrefAllDay: source ? source.allDay : made.allDay,
+        reminderPrefAllDay,
         reminderDefaults,
+        parse: 'idle',
+        source: null,
+        ambiguities: [],
+        touched: [],
       });
     })();
     return () => {
       cancelled = true;
     };
-  }, [key, sourceId, editing, date, time, text, more, rid, db, today, meId]);
+  }, [key, sourceId, editing, date, time, text, more, rid, db, today, meId, clock]);
 
   if (!params || !state || state.key !== key || !ctx) return null;
   const editId = params.editId;
@@ -149,27 +193,46 @@ export function ComposerContainer() {
   });
   // 29〜31 日の毎月は「月末にしますか？」（31 日のない月などはとばされるため。§11）
   const monthEnd = monthEndQuestion(state.draft, state.monthEnd);
-  const vm = monthEnd ? { ...built, ambiguities: [...built.ambiguities, monthEnd] } : built;
+  // 確認へ進んだら、曖昧さの質問と重なりの警告を出す（§16）
+  const vm: ComposerVM = {
+    ...built,
+    parse: state.parse,
+    source: state.source,
+    ambiguities: [...state.ambiguities, ...(monthEnd ? [monthEnd] : [])],
+    overlaps:
+      state.parse === 'done'
+        ? overlapsFor(state.draft, events ?? [], ctx.meId, editId ?? null)
+        : [],
+  };
 
-  const change = (patch: Partial<EventDraftVM>) => {
+  /**
+   * 下書きを置き換え、自分への通知を追従させる（触っていなければ担当・終日の変更に合わせて既定値。
+   * 終日⇔時刻ありの切り替えでは既定値に戻す。§24 D36）
+   */
+  const withReminders = (s: ComposerState, next: EventDraftVM, touchedNow = false) => {
+    const followed = followReminders(
+      s.draft,
+      next,
+      { ...reminderStateOf(s), touched: s.remindersTouched || touchedNow },
+      meId ?? '',
+    );
+    return {
+      draft: { ...next, myReminders: followed.myReminders },
+      remindersTouched: followed.touched,
+    };
+  };
+
+  const change = (patch: Partial<EventDraftVM>, opts: { touch?: boolean } = {}) => {
     setState((s) => {
       if (!s) return s;
+      const touched = opts.touch ? [...new Set([...s.touched, ...Object.keys(patch)])] : s.touched;
       const busyTouched = s.busyTouched || patch.busy !== undefined;
       const patched = applyDraftPatch(s.draft, patch, { busyTouched });
-      // 触っていなければ、終日・担当の変更に合わせて既定値に追従する。終日⇔時刻ありの切り替えでは既定値に戻す
-      const followed = followReminders(
-        s.draft,
-        patched,
-        { ...reminderStateOf(s), touched: s.remindersTouched || patch.myReminders !== undefined },
-        meId ?? '',
-      );
-      const remindersTouched = followed.touched;
-      const draft = { ...patched, myReminders: followed.myReminders };
       return {
         ...s,
-        draft,
+        ...withReminders(s, patched, patch.myReminders !== undefined),
+        touched,
         busyTouched,
-        remindersTouched,
         text: patch.title !== undefined ? patch.title : s.text,
         error: null,
       };
@@ -264,6 +327,81 @@ export function ComposerContainer() {
   const scopeInput = draftToInput(state.draft);
   const scopeDiff =
     master && state.base ? occurrenceChanges(master, state.base, scopeInput, 'all') : null;
+  /** 一言を書き直した: 直すときは件名だけ、書くときはルール解析で札に反映する（札で選んだ項目は残す） */
+  const changeText = (value: string) => {
+    if (editId || !me) {
+      change({ title: value });
+      setState((s) => (s ? { ...s, text: value } : s));
+      return;
+    }
+    const parsed = parseLocally(value, nlpContext(me, allMembers, ctx.nowMs));
+    setState((s) => {
+      if (!s) return s;
+      const patch = withoutTouched(nlpToPatch(parsed.draft, parsed.found, s.draft), s.touched);
+      const draft = applyDraftPatch(s.draft, patch, { busyTouched: s.busyTouched });
+      return {
+        ...s,
+        text: value,
+        ...withReminders(s, draft),
+        parse: 'idle',
+        source: null,
+        ambiguities: [],
+        error: null,
+      };
+    });
+  };
+
+  /**
+   * 「確認へ」（Enter。変換確定の Enter は UI で除く）: オンラインなら POST /api/parse、だめならルール解析のまま。
+   * 結果で下書きを置き換え（札で選んだ項目は残す）、曖昧さの質問と重なりの警告を出す（§16）
+   */
+  const submitText = async () => {
+    const value = state.text.trim();
+    if (!value || editId || !me) return;
+    setState((s) => (s ? { ...s, parse: 'parsing' } : s));
+    const local = parseLocally(value, nlpContext(me, allMembers, ctx.nowMs));
+    let result: {
+      source: 'ai' | 'rules';
+      draft: typeof local.draft;
+      ambiguities: typeof local.ambiguities;
+      found: typeof local.found;
+    } = {
+      source: 'rules',
+      ...local,
+    };
+    if (!offline && value.length <= 200) {
+      try {
+        const res = await Promise.race([
+          apiRequest('POST', '/api/parse', { body: { text: value } }),
+          new Promise<null>((resolve) => setTimeout(() => resolve(null), PARSE_TIMEOUT_MS)),
+        ]);
+        const parsed = res && res.status === 200 ? parseResponseSchema.safeParse(res.body) : null;
+        if (parsed?.success) {
+          result = {
+            source: parsed.data.source,
+            draft: parsed.data.draft as typeof local.draft,
+            ambiguities: parsed.data.ambiguities,
+            found: parsed.data.found,
+          };
+        }
+      } catch {}
+    }
+    setState((s) => {
+      if (!s || s.text.trim() !== value) return s;
+      const patch = withoutTouched(nlpToPatch(result.draft, result.found, s.draft), s.touched);
+      const draft = applyDraftPatch(s.draft, patch, { busyTouched: s.busyTouched });
+      return {
+        ...s,
+        ...withReminders(s, draft),
+        parse: 'done',
+        source: result.source,
+        ambiguities: visibleAmbiguities(result.ambiguities, result.found).map((a) =>
+          toAmbiguityVM(a, draft),
+        ),
+      };
+    });
+  };
+
   const lost =
     master && seriesRid && scopeDiff
       ? lostCounts(master, overrides, seriesRid, {
@@ -276,13 +414,26 @@ export function ComposerContainer() {
   return (
     <EventComposerSheet
       members={members}
-      onChangeDraft={change}
+      onChangeDraft={(patch) => change(patch, { touch: true })}
       onChooseAmbiguity={(ai, oi) => {
         const a = vm.ambiguities[ai];
         const option = a?.options[oi];
         if (!a || !option) return;
-        // 今つないでいる曖昧さは「月末にしますか？」だけ（一言の解析の曖昧さは Phase 5）
-        if (a.field === 'recurrence') setState((s) => (s ? { ...s, monthEnd: oi } : s));
+        if (ai < state.ambiguities.length) {
+          // 一言の解析の曖昧さ（§16）: 選んだ答えに印を付けて当てる
+          setState((s) =>
+            s
+              ? {
+                  ...s,
+                  ambiguities: s.ambiguities.map((x, i) => (i === ai ? { ...x, chosen: oi } : x)),
+                }
+              : s,
+          );
+          change(option.patch, { touch: true });
+          return;
+        }
+        // 「月末にしますか？」
+        setState((s) => (s ? { ...s, monthEnd: oi } : s));
         change(option.patch);
       }}
       onClose={nav.closeComposer}
@@ -292,8 +443,8 @@ export function ComposerContainer() {
       }}
       onSave={() => void save()}
       onSetMode={(mode) => setState((s) => (s ? { ...s, mode } : s))}
-      onSubmitText={() => {}}
-      onTextChange={(text) => change({ title: text })}
+      onSubmitText={() => void submitText()}
+      onTextChange={(value) => changeText(value)}
       online={sync.status !== 'offline'}
       open
       vm={vm}
