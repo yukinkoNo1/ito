@@ -236,6 +236,97 @@ describe('POST /api/parse（§16）', () => {
   });
 });
 
+describe('Phase 5 のレビューの指摘', () => {
+  it('同時に送っても回数制限を超えて AI を呼ばない（枠は呼ぶ前に取る）', async () => {
+    // 返事が遅い AI に、1 分の上限（3）を超える 10 件を同時に送る
+    let release: () => void = () => {};
+    const gate = new Promise<void>((r) => {
+      release = r;
+    });
+    ai.reply = () => aiOut();
+    const slow: AiClient = {
+      complete: async (req) => {
+        ai.calls.push(req);
+        await gate;
+        return aiOut();
+      },
+    };
+    const busy = createTestContext(devEnv({ AI_RATE_PER_MIN: '3', AI_RATE_PER_DAY: '5' }), {
+      now: fromJst('2026-09-27', '14:18'),
+      ai: slow,
+    });
+    seedFamily(busy);
+    try {
+      const pending = Array.from({ length: 10 }, () =>
+        send(busy, 'POST', '/api/parse', { headers: as('haru'), body: { text: TEXT } }),
+      );
+      await new Promise((r) => setTimeout(r, 20));
+      release();
+      const bodies = await Promise.all(
+        pending.map(async (p) => (await (await p).json()) as { source: string; reason?: string }),
+      );
+      expect(ai.calls).toHaveLength(3);
+      expect(bodies.filter((b) => b.source === 'ai')).toHaveLength(3);
+      expect(bodies.filter((b) => b.reason === 'rate_limited')).toHaveLength(7);
+      // 使った枠は結果で書き直される（pending のまま残らない）
+      const rows = busy.database.db.select().from(aiUsage).all();
+      expect(rows.map((r) => r.source)).toEqual(['ai', 'ai', 'ai']);
+    } finally {
+      busy.close();
+    }
+  });
+
+  it('複数日の予定は、期間のどこかの曜日と合えば曜日の食い違いを聞かない', async () => {
+    ai.reply = () =>
+      aiOut({
+        title: '帰省',
+        date: '2026-09-28',
+        end_date: '2026-10-04',
+        all_day: true,
+        start_time: null,
+        member_keys: [],
+        for_everyone: true,
+        location: null,
+      });
+    const { body } = await parse('明日から日曜まで 帰省 みんな');
+    expect(body.source).toBe('ai');
+    expect(body.ambiguities).toEqual([]);
+  });
+
+  it('ルール解析が読めなかった日付・人も、AI が決めていれば書いてあったとする（found）', async () => {
+    ai.reply = () =>
+      aiOut({
+        title: '飲み会',
+        date: '2026-09-30',
+        start_time: '18:00',
+        member_keys: [],
+        for_everyone: true,
+        location: null,
+      });
+    const { body } = await parse('30日 18時 みんなで飲み会');
+    expect(body.source).toBe('ai');
+    expect(body.found).toEqual({
+      date: true,
+      time: true,
+      members: true,
+      private: false,
+      recurrence: false,
+    });
+    // 書いていない日付（AI も今日・明日の決まりのとおり）なら書いていないまま
+    ai.reply = () =>
+      aiOut({
+        title: '打ち合わせ',
+        date: '2026-09-27',
+        start_time: '15:00',
+        member_keys: ['m4'],
+        location: null,
+      });
+    const second = await parse('15時 打ち合わせ');
+    expect((second.body.found as { date: boolean; members: boolean }).date).toBe(false);
+    expect((second.body.found as { date: boolean; members: boolean }).members).toBe(false);
+  });
+});
+
 describe('Anthropic の呼び出し（公式 SDK の fetch を差し替えて形だけ確かめる。実 API は pnpm ai:eval だけ）', () => {
   it('Structured Outputs・temperature 0・max_tokens 800・再試行なしで送り、本文の JSON を読む', async () => {
     const sent: { url: string; init: RequestInit | undefined }[] = [];

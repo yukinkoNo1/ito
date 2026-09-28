@@ -248,6 +248,8 @@ export const memberDtoSchema = z
     role: z.enum(['admin', 'member']),
     disabled: z.boolean(),
     createdAt: isoDateTimeSchema,
+    /** 一言入力で人を指す呼び名（端末のルール解析でほかの家族も見分けるため。§24 D37） */
+    aliases: z.array(z.string()).optional(),
   })
   .strict();
 export type MemberDTO = z.infer<typeof memberDtoSchema>;

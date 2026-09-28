@@ -1,5 +1,5 @@
 import { expect, test } from './fixtures';
-import { api, composerTrigger, ensureFamily } from './helpers';
+import { api, composerTrigger, ensureFamily, ORIGIN } from './helpers';
 
 /**
  * Phase 5（一言入力）: ルール解析で書いて保存し、これから・月に出る。日本語入力の変換確定の Enter では確認へ進まない（§16・§21）。
@@ -60,6 +60,51 @@ test('一言（ルール解析）で書いて保存すると、これから・�
   await expect(page.getByRole('region', { name: '選んだ日の予定' })).toContainText(
     'E2E一言の歯医者',
   );
+});
+
+test('非公開の「最近の予定」を選んで確認へ進んでも、非公開のまま保存する（Phase 5 のレビュー）', async ({
+  page,
+  request,
+}) => {
+  const T = 'E2E 内緒のプレゼント選び';
+  // 昨日（日本時間）の自分の非公開の予定（最近の予定の候補になる）
+  const y = new Date(Date.now() + 9 * 60 * 60 * 1000 - 24 * 60 * 60 * 1000);
+  const ymd = `${y.getUTCFullYear()}-${String(y.getUTCMonth() + 1).padStart(2, '0')}-${String(y.getUTCDate()).padStart(2, '0')}`;
+  const res = await request.fetch('/api/events', {
+    method: 'POST',
+    headers: {
+      'X-Dev-Login': 'papa@example.com',
+      'X-Ito-Client': '1',
+      'Content-Type': 'application/json',
+      Origin: ORIGIN,
+      'Idempotency-Key': 'e2e-p5-private-suggestion',
+    },
+    data: JSON.stringify({
+      title: T,
+      allDay: false,
+      startAt: `${ymd}T19:00:00+09:00`,
+      visibility: 'private',
+    }),
+  });
+  expect(res.status()).toBe(201);
+  await page.goto('/');
+  await composerTrigger(page).click();
+  const dialog = page.getByRole('dialog', { name: '予定を書く' });
+  await dialog.getByRole('button', { name: new RegExp(T) }).click();
+  // 一言に「内緒」がなくても、確認へ進んで公開にしない
+  await dialog.getByLabel('予定を一言で入力').press('Enter');
+  await expect(dialog.getByText(/かんたん解析/)).toBeVisible();
+  await dialog.getByRole('button', { name: /に保存$/ }).click();
+  await expect(dialog).toBeHidden();
+  await expect
+    .poll(async () => {
+      const sync = await api(request, 'papa', 'GET', '/api/sync?cursor=0');
+      const events = (
+        (await sync.json()) as { events: { title: string | null; visibility: string }[] }
+      ).events;
+      return events.filter((e) => e.title === T).map((e) => e.visibility);
+    })
+    .toEqual(['private', 'private']);
 });
 
 test('日本語入力の変換確定の Enter（isComposing・keyCode 229）では確認へ進まない', async ({

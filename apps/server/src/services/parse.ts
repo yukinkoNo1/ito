@@ -30,7 +30,7 @@ import { z } from 'zod';
 import type { DbLike } from '../db/client';
 import { aiUsage, type MemberRow } from '../db/schema';
 import type { Logger } from '../logger';
-import type { AiClient } from './ai-client';
+import type { AiClient, AiResponse } from './ai-client';
 import { listActiveMembers } from './members';
 
 /**
@@ -472,19 +472,26 @@ export function fromAiOutput(
   const said = [...text.normalize('NFKC').matchAll(/([日月火水木金土])曜/g)].map(
     (m) => WEEKDAY_LABELS.indexOf(m[1] as (typeof WEEKDAY_LABELS)[number]) as Weekday,
   );
+  // 複数日・日付をまたぐ予定は、その期間のどれかの日の曜日と合えばよい（「明日から日曜まで」）。
+  // 選べる日が 2 つにならないときは聞かない
+  const spanDays = Math.min(366, Math.max(0, diffDays(o.date, endDate)));
+  const weekdaysInSpan = new Set(
+    Array.from({ length: spanDays + 1 }, (_, i) => weekdayOf(addDays(o.date, i))),
+  );
+  const alt = rules.draft.startDate;
   if (
     o.recurrence === 'none' &&
     said.length > 0 &&
-    !said.includes(weekdayOf(o.date)) &&
-    !ambiguities.some((a) => a.field === 'date')
+    !said.some((w) => weekdaysInSpan.has(w)) &&
+    !ambiguities.some((a) => a.field === 'date') &&
+    alt !== o.date
   ) {
-    const alt = rules.draft.startDate;
     ambiguities.push({
       field: 'date',
       question: `${formatMd(o.date)} は${WEEKDAY_LABELS[weekdayOf(o.date)]}曜日です。どの日ですか？`,
       options: [
         { label: formatMdW(o.date), value: o.date },
-        ...(alt !== o.date ? [{ label: formatMdW(alt), value: alt }] : []),
+        { label: formatMdW(alt), value: alt },
       ],
     });
   }
@@ -537,6 +544,31 @@ function usageSince(db: DbLike, memberId: string, since: number): number {
   );
 }
 
+/**
+ * AI の結果のとき、一言に何が書いてあったか（§24 D37）。ルール解析が見つけたものに加えて、AI が決めた値が
+ * 書いていないときの決まり（今日・明日、終日、書いた人だけ、公開、繰り返しなし）と違えば書いてあったとみなす
+ * （「30日 18時」の日付や「みんなで」を、ルール解析が読めなくても捨てない）
+ */
+export function aiFound(
+  rules: NlpResult,
+  ai: Omit<NlpResult, 'found'>,
+  writerId: string,
+): NlpResult['found'] {
+  const d = ai.draft;
+  return {
+    date: rules.found.date || d.startDate !== rules.draft.startDate || d.recurrence.kind !== 'none',
+    time: rules.found.time || !d.allDay || ai.ambiguities.some((a) => a.field === 'time'),
+    members:
+      rules.found.members ||
+      d.forEveryone ||
+      d.isPrivate ||
+      d.memberIds.length !== 1 ||
+      d.memberIds[0] !== writerId,
+    private: rules.found.private || d.isPrivate,
+    recurrence: rules.found.recurrence || d.recurrence.kind !== 'none',
+  };
+}
+
 export async function parseText(
   deps: ParseDeps,
   me: MemberRow,
@@ -555,22 +587,39 @@ export async function parseText(
   ) {
     return byRules('rate_limited');
   }
+  // 回数の枠は AI を呼ぶ前に取る（数えるのと行を書くのを await をはさまずに続けて行い、同時の要求でも
+  // 回数制限を超えない。結果は呼んだあとで書き直す）
+  const usageId = uuidv7(now);
+  db.insert(aiUsage)
+    .values({
+      id: usageId,
+      memberId: me.id,
+      createdAt: now,
+      ok: false,
+      source: 'pending',
+      latencyMs: 0,
+      inputTokens: 0,
+      outputTokens: 0,
+    })
+    .run();
   const keyed = keyMembers(members);
   const system = buildSystemPrompt(now, ctx.weekStart, keyed, me, ctx);
-  const res = await ai.complete({
-    system,
-    user: text,
-    schema: outputSchema(keyed.map((k) => k.key)),
-  });
+  let res: AiResponse;
+  try {
+    res = await ai.complete({
+      system,
+      user: text,
+      schema: outputSchema(keyed.map((k) => k.key)),
+    });
+  } catch {
+    res = { kind: 'error', status: null };
+  }
   const latency = clock.now() - now;
   let out: ParseResponse;
   if (res.kind === 'ok') {
     try {
-      out = {
-        source: 'ai',
-        ...fromAiOutput(res.json, keyed, me, text, now, rules),
-        found: rules.found,
-      };
+      const parsed = fromAiOutput(res.json, keyed, me, text, now, rules);
+      out = { source: 'ai', ...parsed, found: aiFound(rules, parsed, me.id) };
     } catch (e) {
       if (!(e instanceof InvalidOutput)) throw e;
       out = byRules('invalid');
@@ -578,17 +627,15 @@ export async function parseText(
   } else {
     out = byRules(res.kind === 'error' ? 'error' : res.kind);
   }
-  db.insert(aiUsage)
-    .values({
-      id: uuidv7(now),
-      memberId: me.id,
-      createdAt: now,
+  db.update(aiUsage)
+    .set({
       ok: out.source === 'ai',
       source: out.source,
       latencyMs: latency,
       inputTokens: res.kind === 'ok' ? res.inputTokens : 0,
       outputTokens: res.kind === 'ok' ? res.outputTokens : 0,
     })
+    .where(eq(aiUsage.id, usageId))
     .run();
   // 入力文・結果の中身は出さない
   logger.info(

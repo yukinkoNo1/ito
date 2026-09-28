@@ -1,5 +1,5 @@
 # 進み具合
-今: Phase 5（一言入力） / 次にやること: 退避した Phase 5 の作業（git stash「phase5-wip」）を戻し、Anthropic の呼び出しを SPEC §8 の @anthropic-ai/sdk に置き換え、書く画面の通知の決まり（D36）と合わせる → 確認 → レビュー → phase-5 → Phase 7 → 総点検 → 最終確認
+今: Phase 7（仕上げ） / 次にやること: 退避した Phase 7 の作業（git stash「phase7-wip」: 空き時間・検索・書き出し・掃除とバックアップ・同期の gzip・性能のテスト）を戻す → E2E（§6.2 の空き→書く、検索、書き出し、60fps）・T7 の成果物の検査・security-map → レビュー → phase-7 → 総点検 → 最終確認
 
 ## ステップ
 | ステップ | 状態（未着手・作業中・完了） | タグ | メモ |
@@ -10,7 +10,7 @@
 | Phase 6 UI 統合 | 完了 | phase-6 | Phase 2 の次に行った（§24 D15）。レビューの指摘（シートのスワイプ、テーマの監視の漏れ、自分の非公開の候補、書く画面の日時の範囲、トースト・案内、履歴・ゴミ箱の状態、人の札が 7 個以上、日付をまたぐ行、検査の範囲 ほか）を直した |
 | Phase 3 繰り返し | 完了 | phase-3 | レビューの指摘（件名だけ直してもシリーズが動く、C-04 の件数とサーバーの食い違い、リセットした例外の復活、毎月の規則のずれ、回が出ない規則、pnpm dev が rrule の読み込みで起動しない、回の送信待ちの 409 ほか）を直した（§24 D34） |
 | Phase 4 通知 | 完了 | phase-4 | レビューの指摘（止めた端末の再購読、まとめ待ちの件名の漏れ、pnpm dev のログアウト、renotify、終日⇔時刻ありの通知 ほか）を直し、修正もレビューして直した（§24 D36） |
-| Phase 5 一言入力 | 作業中 | phase-5 | 退避した作業を戻し、Anthropic の呼び出しを公式 SDK にした（§24 D37） |
+| Phase 5 一言入力 | 完了 | phase-5 | 退避した作業を戻し、Anthropic の呼び出しを公式 SDK にした。レビューの 21 件（high 1・medium 11・low 9）を直した（§24 D37） |
 | Phase 7 仕上げ | 未着手 | phase-7 | |
 | 総点検 | 未着手 | audit | |
 | 最終確認 | 未着手 | — | |
@@ -106,6 +106,8 @@
 | Phase 5 | 日本語入力の変換確定の Enter で送信しない | E2E phase5.spec.ts「日本語入力の変換確定の Enter（isComposing・keyCode 229）では確認へ進まない」 | OK |
 | Phase 5 | 一言で書いて保存 → これから・月に出る（§21 の E2E） | E2E phase5.spec.ts「一言（ルール解析）で書いて保存すると…」（入力バー → 一言 → 保存） | OK |
 | Phase 5 | 重なりの警告（他人の非公開は「予定あり」） | web test/phase5.test.ts「重なりの警告」 | OK |
+| Phase 5 | レビューの指摘（§24 D37 (10)） | core nlp-rules.test.ts「ルール解析のレビューの指摘（Phase 5）」（10 件）・「呼び名は長い順に…」、server parse.test.ts「Phase 5 のレビューの指摘」（3 件）、web phase5.test.ts「一言と札の組み合わせ」「重なりの警告の範囲」、E2E phase5.spec.ts「非公開の「最近の予定」を…」 | OK |
+| Phase 5 | `pnpm check`・`pnpm test:e2e`・`docker compose build`・`up -d --wait` | `pnpm check`（Vitest 554 件）、`pnpm test:e2e`（50 件）、`docker compose build`・`up -d --wait`・`exec app node dist/cli.js feed-token list`・`down` | OK（すべて EXIT=0） |
 | Phase 6 | §6.2「一言を書いて保存」の手数 | E2E phase5.spec.ts（入力バーを押す → 一言を書く → 「…に保存」を押す。タップは 2 回） | OK（Phase 5 で確認） |
 | Phase 6 | `pnpm check`・`pnpm test:e2e`・`pnpm build`・`docker compose build` | `pnpm check`（261 件）、`pnpm test:e2e`（39 件）、`pnpm build`、`docker compose build` | OK（すべて EXIT=0） |
 

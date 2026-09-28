@@ -14,11 +14,14 @@ import { applyDraftPatch } from '../../viewmodels/composer';
 import { buildComposerVM, monthEndQuestion } from '../../viewmodels/composer-vm';
 import { draftToInput, emptyDraft, eventToDraft } from '../../viewmodels/detail';
 import {
+  applyTextPatch,
+  forgetTextFields,
   nlpContext,
   nlpToPatch,
   overlapsFor,
   parseLocally,
   parseResponseSchema,
+  protectTouched,
   toAmbiguityVM,
   visibleAmbiguities,
 } from '../../viewmodels/nlp';
@@ -66,20 +69,12 @@ interface ComposerState {
   ambiguities: AmbiguityVM[];
   /** 札で選んだ項目（一言を書き直しても上書きしない） */
   touched: string[];
+  /** 一言で入れた項目の、入れる前の値（一言からその語を消したら戻す） */
+  textBefore: Partial<EventDraftVM>;
 }
 
 /** 一言の解析の待ち時間の上限（サーバーの AI は 6 秒。通信の分を足す） */
 const PARSE_TIMEOUT_MS = 10_000;
-
-/** 解析の結果のうち、札で選んだ項目は上書きしない（件名は一言から） */
-function withoutTouched(
-  patch: Partial<EventDraftVM>,
-  touched: readonly string[],
-): Partial<EventDraftVM> {
-  const out: Record<string, unknown> = { ...patch };
-  for (const k of touched) if (k !== 'title') delete out[k];
-  return out as Partial<EventDraftVM>;
-}
 
 /**
  * S-05 予定を書く。入力バー・日の見出しの「＋」・月の日・詳細の「編集」「複製」から開く（`?compose=1`）。
@@ -141,7 +136,10 @@ export function ComposerContainer() {
       const members = await db.members.toArray();
       const parsed =
         !source && text && me ? parseLocally(text, nlpContext(me, members, clock.now())) : null;
-      const withText = parsed ? { ...made, ...nlpToPatch(parsed.draft, parsed.found, made) } : made;
+      const applied = parsed
+        ? applyTextPatch(made, nlpToPatch(parsed.draft, parsed.found, made), {})
+        : { patch: {}, textBefore: {} };
+      const withText = { ...made, ...applied.patch };
       // 本人の行はシリーズ・予定そのものの行なので、種類も回ではなくシリーズ・予定のもの。種類が違えば既定値
       const reminderPrefAllDay = source ? source.allDay : made.allDay;
       const draft = {
@@ -169,6 +167,7 @@ export function ComposerContainer() {
         source: null,
         ambiguities: [],
         touched: [],
+        textBefore: applied.textBefore,
       });
     })();
     return () => {
@@ -231,6 +230,11 @@ export function ComposerContainer() {
       return {
         ...s,
         ...withReminders(s, patched, patch.myReminders !== undefined),
+        // 札・候補で変えた項目は、一言で入れたものではなくなる
+        textBefore: forgetTextFields(
+          s.textBefore,
+          Object.keys(patch).filter((k) => k !== 'title'),
+        ),
         touched,
         busyTouched,
         text: patch.title !== undefined ? patch.title : s.text,
@@ -337,12 +341,17 @@ export function ComposerContainer() {
     const parsed = parseLocally(value, nlpContext(me, allMembers, ctx.nowMs));
     setState((s) => {
       if (!s) return s;
-      const patch = withoutTouched(nlpToPatch(parsed.draft, parsed.found, s.draft), s.touched);
-      const draft = applyDraftPatch(s.draft, patch, { busyTouched: s.busyTouched });
+      const applied = applyTextPatch(
+        s.draft,
+        protectTouched(nlpToPatch(parsed.draft, parsed.found, s.draft), s.touched, s.draft),
+        s.textBefore,
+      );
+      const draft = applyDraftPatch(s.draft, applied.patch, { busyTouched: s.busyTouched });
       return {
         ...s,
         text: value,
         ...withReminders(s, draft),
+        textBefore: applied.textBefore,
         parse: 'idle',
         source: null,
         ambiguities: [],
@@ -387,12 +396,19 @@ export function ComposerContainer() {
       } catch {}
     }
     setState((s) => {
-      if (!s || s.text.trim() !== value) return s;
-      const patch = withoutTouched(nlpToPatch(result.draft, result.found, s.draft), s.touched);
-      const draft = applyDraftPatch(s.draft, patch, { busyTouched: s.busyTouched });
+      if (!s) return s;
+      // 待っているあいだに一言が変わった（書き直した・候補を選んだ）なら、この結果は使わない
+      if (s.text.trim() !== value) return s.parse === 'parsing' ? { ...s, parse: 'idle' } : s;
+      const applied = applyTextPatch(
+        s.draft,
+        protectTouched(nlpToPatch(result.draft, result.found, s.draft), s.touched, s.draft),
+        s.textBefore,
+      );
+      const draft = applyDraftPatch(s.draft, applied.patch, { busyTouched: s.busyTouched });
       return {
         ...s,
         ...withReminders(s, draft),
+        textBefore: applied.textBefore,
         parse: 'done',
         source: result.source,
         ambiguities: visibleAmbiguities(result.ambiguities, result.found).map((a) =>
@@ -432,9 +448,9 @@ export function ComposerContainer() {
           change(option.patch, { touch: true });
           return;
         }
-        // 「月末にしますか？」
+        // 「月末にしますか？」（選んだ繰り返しは、一言を書き直しても上書きしない）
         setState((s) => (s ? { ...s, monthEnd: oi } : s));
-        change(option.patch);
+        change(option.patch, { touch: true });
       }}
       onClose={nav.closeComposer}
       onPickSuggestion={(index) => {

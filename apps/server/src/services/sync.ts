@@ -14,6 +14,14 @@ import { listAllMembers } from './members';
 import { loadActiveEvents, loadEventsByIds } from './records';
 import { listMyReminderPrefs } from './reminders';
 
+function aliasesOf(m: MemberRow): string[] {
+  try {
+    const v: unknown = JSON.parse(m.aliases);
+    if (Array.isArray(v)) return v.filter((x): x is string => typeof x === 'string');
+  } catch {}
+  return [];
+}
+
 export function toMemberDto(m: MemberRow): MemberDTO {
   return {
     id: m.id,
@@ -23,15 +31,12 @@ export function toMemberDto(m: MemberRow): MemberDTO {
     role: m.role as MemberDTO['role'],
     disabled: m.disabledAt !== null,
     createdAt: toIsoJst(m.createdAt, true),
+    aliases: aliasesOf(m),
   };
 }
 
 export function toMeDto(m: MemberRow): MeDTO {
-  let aliases: string[] = [];
-  try {
-    const v: unknown = JSON.parse(m.aliases);
-    if (Array.isArray(v)) aliases = v.filter((x): x is string => typeof x === 'string');
-  } catch {}
+  const aliases = aliasesOf(m);
   return {
     id: m.id,
     name: m.name,
