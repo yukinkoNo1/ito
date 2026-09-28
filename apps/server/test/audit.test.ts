@@ -926,4 +926,46 @@ describe('総点検のレビュー（4 回目 F1・F2・5 回目 G1）: 繰り�
     expect(body.detail).toContain('終わったもの');
     expect(MAX_SERIES_WITH_ENDED_PER_OWNER * 8).toBeLessThan(4000);
   });
+
+  it('H2 終わっていないものが 100 件のとき、終わった繰り返しの終わりを消して終わっていないものにするのは 409。終わったまま・今のままの変更と、終わったものを作る・戻すのは通る', async () => {
+    ctx = createTestContext(devEnv(), { now: NOW });
+    seedFamily(ctx);
+    seedSeries(100, 0, 'mama');
+    seedSeries(1, 1, 'mama', false, 'FREQ=WEEKLY;UNTIL=20250101T235959', '2024-01-01');
+    const rows = ctx.database.db.select().from(events).all();
+    const ended = rows.find((e) => e.rrule?.includes('UNTIL') && e.deletedAt === null);
+    const trashedEnded = rows.find((e) => e.rrule?.includes('UNTIL') && e.deletedAt !== null);
+    const active = rows.find((e) => e.rrule === 'FREQ=WEEKLY' && e.deletedAt === null);
+    if (!ended || !trashedEnded || !active) throw new Error('行がない');
+    const patch = (id: string, version: number, key: string, changes: Record<string, unknown>) =>
+      send(ctx, 'PATCH', `/api/events/${id}`, {
+        headers: { ...as('papa'), 'if-match': String(version), 'idempotency-key': key },
+        body: { scope: 'all', changes },
+      });
+    // 終わりを消すと終わっていないシリーズが 1 つ増える
+    const revived = await patch(ended.id, ended.version, 'h2-r1', { rrule: 'FREQ=WEEKLY' });
+    expect(revived.status).toBe(409);
+    expect(((await revived.json()) as { code: string }).code).toBe('series_limit');
+    // 終わったままの変更・終わっていないシリーズの変更は数を増やさない
+    expect((await patch(ended.id, ended.version, 'h2-r2', { title: '昔の習い事' })).status).toBe(
+      200,
+    );
+    expect((await patch(active.id, active.version, 'h2-r3', { title: '今の習い事' })).status).toBe(
+      200,
+    );
+    // 終わった繰り返しを作る・ゴミ箱から戻すのは、終わっていないものを増やさない
+    const past = await createEvent(ctx, 'mama', {
+      title: '去年の合宿',
+      allDay: true,
+      startDate: '2025-08-01',
+      rrule: 'FREQ=DAILY;UNTIL=20250803',
+      memberIds: [IDS.mama],
+    });
+    expect(past.res.status).toBe(201);
+    const restored = await send(ctx, 'POST', `/api/events/${trashedEnded.id}/restore`, {
+      headers: { ...as('mama'), 'idempotency-key': 'h2-r4' },
+      body: {},
+    });
+    expect(restored.status).toBe(200);
+  });
 });

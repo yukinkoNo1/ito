@@ -1,5 +1,5 @@
 import { type Clock, parseRrule, seriesEnded, todayJst, toJstParts } from '@ito/core';
-import { and, eq, isNotNull, isNull } from 'drizzle-orm';
+import { and, eq, isNotNull, isNull, ne } from 'drizzle-orm';
 import type { DbLike } from '../db/client';
 import { events } from '../db/schema';
 import { ApiError } from '../errors';
@@ -16,8 +16,26 @@ import { ApiError } from '../errors';
 export const MAX_SERIES_PER_OWNER = 100;
 export const MAX_SERIES_WITH_ENDED_PER_OWNER = 400;
 
-/** その持ち主のシリーズを 1 つ増やせるか（増やせなければ 409 series_limit） */
-export function assertSeriesRoom(db: DbLike, clock: Clock, ownerId: string): void {
+/** 数えるのに使う行の中身 */
+export interface SeriesShape {
+  rrule: string | null;
+  allDay: boolean;
+  startAt: number | null;
+  startDate: string | null;
+}
+
+/**
+ * その持ち主のシリーズとして next（作る・繰り返しにする・分けた後ろ・戻す・終わりを変える行）を置けるか（置けなければ
+ * 409 series_limit）。selfId の行（変える前の自分）は数えずに next を 1 件として数え、終わっていないものの数は
+ * next が終わっていないときだけ確かめる（終わったものを作る・戻すのは、終わっていないものを増やさない）
+ */
+export function assertSeriesRoom(
+  db: DbLike,
+  clock: Clock,
+  ownerId: string,
+  next: SeriesShape,
+  selfId: string | null = null,
+): void {
   const rows = db
     .select({
       rrule: events.rrule,
@@ -32,10 +50,11 @@ export function assertSeriesRoom(db: DbLike, clock: Clock, ownerId: string): voi
         isNotNull(events.rrule),
         isNull(events.parentId),
         isNull(events.deletedAt),
+        selfId === null ? undefined : ne(events.id, selfId),
       ),
     )
     .all();
-  if (rows.length >= MAX_SERIES_WITH_ENDED_PER_OWNER) {
+  if (rows.length + 1 > MAX_SERIES_WITH_ENDED_PER_OWNER) {
     throw new ApiError(
       409,
       'series_limit',
@@ -43,9 +62,10 @@ export function assertSeriesRoom(db: DbLike, clock: Clock, ownerId: string): voi
     );
   }
   const today = todayJst(clock.now());
+  if (ended(next, today)) return;
   let active = 0;
   for (const r of rows) if (!ended(r, today)) active++;
-  if (active >= MAX_SERIES_PER_OWNER) {
+  if (active + 1 > MAX_SERIES_PER_OWNER) {
     throw new ApiError(
       409,
       'series_limit',
@@ -54,11 +74,13 @@ export function assertSeriesRoom(db: DbLike, clock: Clock, ownerId: string): voi
   }
 }
 
+/** 今の時計で終わったシリーズか（繰り返しでない行は数えないので true） */
+export function seriesRowEnded(r: SeriesShape, clock: Clock): boolean {
+  return ended(r, todayJst(clock.now()));
+}
+
 /** 今日以降に始まる回がもうないシリーズか（規則が読めない・開始がない行は展開されないので、終わりとみなす） */
-function ended(
-  r: { rrule: string | null; allDay: boolean; startAt: number | null; startDate: string | null },
-  today: string,
-): boolean {
+function ended(r: SeriesShape, today: string): boolean {
   const parsed = r.rrule ? parseRrule(r.rrule) : null;
   if (!parsed?.ok) return true;
   let dtstart: { date: string; time: string };
