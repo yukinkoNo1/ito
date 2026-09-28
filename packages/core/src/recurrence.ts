@@ -421,6 +421,12 @@ function periodHasOccurrence(rule: RuleParts, periodStart: Wall): boolean {
   return onePeriod(rule, periodStart).after(toFloating(periodStart), true) !== null;
 }
 
+/** テスト用: 展開で行った重い仕事の数（rrule で 1 期間を数えた回数・足した期間の数）。直しを切り分けて確かめる */
+const work = { probes: 0, periodSteps: 0 };
+export function recurrenceWorkForTest(): { probes: number; periodSteps: number } {
+  return { ...work };
+}
+
 /** 規則の形（BY の指定）ごとの、期間の種類 → 回の数 */
 const periodCountTables = new LruCache<Map<string, number>>(4000);
 
@@ -440,6 +446,7 @@ function periodCounter(ex: RuleParts): (y: number, m: number) => number {
     const known = table.get(kind);
     if (known !== undefined) return known;
     const start = { date: `${representativeYear(y)}-${pad2(m)}-01`, time: '00:00' };
+    work.probes++;
     const n = onePeriod(ex, start).all().length;
     table.set(kind, n);
     return n;
@@ -463,11 +470,15 @@ function usedByPeriods(rule: RuleParts, ex: RuleParts, dtstart: Wall, k: number)
   const monthly = rule.freq === 'MONTHLY';
   const origin = monthly ? year * 12 + (month - 1) : year;
   const inPeriod = (j: number) => {
+    work.periodSteps++;
     const at = origin + j * rule.interval;
     return monthly ? count(Math.floor(at / 12), (at % 12) + 1) : count(at, 1);
   };
-  const checkpoints =
-    usedCheckpoints.get(key) ?? usedCheckpoints.set(key, [onePeriod(plain, dtstart).all().length]);
+  let checkpoints = usedCheckpoints.get(key);
+  if (!checkpoints) {
+    work.probes++;
+    checkpoints = usedCheckpoints.set(key, [onePeriod(plain, dtstart).all().length]);
+  }
   const target = Math.floor((k - 1) / USED_CHECKPOINT);
   while (checkpoints.length - 1 < target) {
     const i = checkpoints.length - 1;

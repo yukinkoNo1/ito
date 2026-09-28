@@ -3,6 +3,7 @@ import { eq } from 'drizzle-orm';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { events, members, pushSubscriptions } from '../src/db/schema';
 import { createFeedToken } from '../src/services/feed-tokens';
+import { insertRecord } from '../src/services/records';
 import { as, createEvent, IDS, LOGINS, seedFamily, syncAs, timed } from './family';
 import {
   createTestContext,
@@ -711,5 +712,101 @@ describe('総点検のレビュー（2 回目）D6: 時計が戻っても、失�
       .reduce((n, l) => n + ((JSON.parse(l) as { failures: number }).failures ?? 0), 0);
     expect(total).toBe(3);
     expect(delays.every((ms) => ms >= 1000 && ms <= 60_000)).toBe(true);
+  });
+});
+
+describe('総点検のレビュー（4 回目）F1・F2: 繰り返しの予定は家族で 500 件まで（展開で覚えるものを上回らない）', () => {
+  function seedSeries(n: number, deleted = 0) {
+    for (let i = 0; i < n + deleted; i++) {
+      const at = fromJst(addDays('2026-01-01', i % 300), '09:00');
+      const gone = i >= n;
+      insertRecord(ctx.database.db, {
+        id: uuidv7(NOW + 50_000 + i),
+        version: 1,
+        title: `繰り返し ${i}`,
+        note: null,
+        location: null,
+        allDay: false,
+        startAt: at,
+        endAt: null,
+        startDate: null,
+        endDate: null,
+        rrule: 'FREQ=WEEKLY',
+        exdates: [],
+        parentId: null,
+        recurrenceId: null,
+        memberIds: [IDS.papa],
+        forEveryone: false,
+        busy: true,
+        visibility: 'family',
+        ownerId: IDS.papa,
+        createdBy: IDS.papa,
+        updatedBy: IDS.papa,
+        deletedBy: gone ? IDS.papa : null,
+        createdAt: NOW - 1000,
+        updatedAt: NOW - 1000,
+        deletedAt: gone ? NOW - 1000 : null,
+      });
+    }
+  }
+
+  it('500 件あるとき、繰り返しの予定を作る・繰り返しにする・「これ以降」で分ける・ゴミ箱から戻すのは 409 series_limit。繰り返しでない予定は作れる', async () => {
+    ctx = createTestContext(devEnv(), { now: NOW });
+    seedFamily(ctx);
+    seedSeries(499, 1);
+    const one = await createEvent(ctx, 'mama', {
+      title: '500 件目',
+      allDay: true,
+      startDate: '2026-10-01',
+      rrule: 'FREQ=MONTHLY',
+      memberIds: [IDS.mama],
+    });
+    expect(one.res.status).toBe(201);
+    const over = await createEvent(ctx, 'mama', {
+      title: '501 件目',
+      allDay: true,
+      startDate: '2026-10-01',
+      rrule: 'FREQ=MONTHLY',
+      memberIds: [IDS.mama],
+    });
+    expect(over.res.status).toBe(409);
+    expect(((await over.res.json()) as { code: string }).code).toBe('series_limit');
+    const plain = await createEvent(ctx, 'mama', {
+      title: '1 回だけ',
+      allDay: true,
+      startDate: '2026-10-02',
+      memberIds: [IDS.mama],
+    });
+    expect(plain.res.status).toBe(201);
+    const toSeries = await send(ctx, 'PATCH', `/api/events/${plain.event.id}`, {
+      headers: {
+        ...as('mama'),
+        'if-match': String(plain.event.version),
+        'idempotency-key': 'f1-1',
+      },
+      body: { scope: 'all', changes: { rrule: 'FREQ=WEEKLY' } },
+    });
+    expect(toSeries.status).toBe(409);
+    const split = await send(ctx, 'PATCH', `/api/events/${one.event.id}`, {
+      headers: { ...as('mama'), 'if-match': String(one.event.version), 'idempotency-key': 'f1-2' },
+      body: {
+        scope: 'following',
+        recurrenceId: '2026-12-01',
+        exceptionId: uuidv7(NOW + 99),
+        changes: { title: '12 月から' },
+      },
+    });
+    expect(split.status).toBe(409);
+    const trashed = ctx.database.db
+      .select()
+      .from(events)
+      .all()
+      .find((e) => e.deletedAt !== null && e.rrule !== null);
+    if (!trashed) throw new Error('ゴミ箱の繰り返しがない');
+    const restored = await send(ctx, 'POST', `/api/events/${trashed.id}/restore`, {
+      headers: { ...as('papa'), 'idempotency-key': 'f1-3' },
+      body: {},
+    });
+    expect(restored.status).toBe(409);
   });
 });

@@ -30,6 +30,7 @@ import { describeDiff, hideActivityOf, memberNames, recordActivity } from './act
 import { hidePendingNoticesOf } from './family-notices';
 import { insertRecord, loadExceptions, recordChange, updateRecord } from './records';
 import { copyReminderPrefs } from './reminders';
+import { assertSeriesRoom } from './series-limit';
 
 /**
  * 繰り返しの編集・削除の範囲（§11・§13）。`:id` は親（マスター）、If-Match は親の version（シリーズ単位の楽観ロック。
@@ -330,6 +331,8 @@ export function updateFollowing(
   const now = clock.now();
   const id = newId ?? uuidv7(now);
   checkUnusedId(db, id);
+  // 「これ以降」は新しいシリーズを作る（家族で 500 件まで。§24 D41）
+  assertSeriesRoom(db);
   const exceptions = discardExceptions(db, master, (r) => isAtOrAfter(r, rid), now);
   const head = bumpMaster(db, me, master, now, {
     rrule: split.headRrule,

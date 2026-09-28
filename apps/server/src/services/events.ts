@@ -28,6 +28,7 @@ import {
   updateFollowing,
   updateThisOccurrence,
 } from './series';
+import { assertSeriesRoom } from './series-limit';
 
 export const TRASH_DAYS = 30;
 
@@ -135,6 +136,7 @@ export function createEvent(
   if ('errors' in fields) throw validationError(fields.errors);
   const f = { ...fields.value, memberIds: orderMemberIds(db, fields.value.memberIds) };
   checkMembers(db, f.memberIds);
+  if (f.rrule !== null) assertSeriesRoom(db);
   const now = clock.now();
   const id = input.id ?? uuidv7(now);
   if (db.select({ id: events.id }).from(events).where(eq(events.id, id)).get()) {
@@ -228,6 +230,8 @@ export function updateEvent(
   if ('errors' in fields) throw validationError(fields.errors);
   const f = { ...fields.value, memberIds: orderMemberIds(db, fields.value.memberIds) };
   checkMembers(db, f.memberIds, current.memberIds);
+  // 繰り返しでない予定を繰り返しにすると、シリーズが 1 つ増える
+  if (current.rrule === null && f.rrule !== null) assertSeriesRoom(db);
 
   const now = clock.now();
   // 繰り返しの回の開始が変わるなら、例外・取り消しをリセットする（§11。件数を返す）
@@ -351,6 +355,8 @@ export function restoreEvent(
     return { status: 200, body: { event: projectEvent(current, me.id) } };
   if (current.deletedAt <= clock.now() - TRASH_DAYS * 24 * 60 * 60 * 1000)
     throw new ApiError(410, 'gone');
+  // ゴミ箱の繰り返しを戻すと、シリーズが 1 つ増える
+  if (current.rrule !== null) assertSeriesRoom(db);
   const now = clock.now();
   const deletedAt = current.deletedAt;
   const next: EventRecord = {

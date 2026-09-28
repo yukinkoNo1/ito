@@ -532,9 +532,17 @@ describe('総点検のレビュー（3 回目）E1・E2: COUNT の毎月・毎�
     wall(addDays('1970-01-01', i * 3), `${pad(8 + Math.floor(i / 60))}:${pad(i % 60)}`),
   );
 
-  it('E1 始まる時刻がばらばらな 600 本でも、2 回目の展開は 100ms 未満', async () => {
+  it('E1 始まる時刻がばらばらな 600 本でも、期間ごとの回の数は規則の形ごとに 1 回だけ数える（2 回目の展開は 100ms 未満）', async () => {
     vi.resetModules();
     const r = await import('../src/recurrence');
+    // 仕事の数で確かめる（時刻を鍵に入れると、600 本 × 期間の種類およそ 98 回を数え直す。4 回目 F4・F6）
+    const counted = r.parseRrule('FREQ=MONTHLY;COUNT=1000');
+    if (!counted.ok) throw new Error(counted.message);
+    const first = r.recurrenceWorkForTest().probes;
+    for (const s of starts) r.ruleStarts(counted.rule, s, wall('2026-09-28'), wall('2026-10-01'));
+    // 最初の期間（開始より後）を 1 本ずつ 600 回と、期間の種類（開始の日で決まる BYMONTHDAY の 31 通りの形 ×
+    // およそ 98 種類）。時刻を鍵に入れると 600 本 × 98 種類＝およそ 58,800 回になる
+    expect(r.recurrenceWorkForTest().probes - first).toBeLessThan(5000);
     for (const text of [
       'FREQ=MONTHLY;COUNT=1000',
       'FREQ=MONTHLY;BYDAY=MO,TU,WE,TH,FR;BYSETPOS=-1;COUNT=1000',
@@ -550,17 +558,69 @@ describe('総点検のレビュー（3 回目）E1・E2: COUNT の毎月・毎�
     }
   });
 
-  it('E2 表示範囲を 1 か月ずつ動かしても、1 回の展開は 600 本で 100ms 未満', async () => {
+  it('E2 表示範囲を 1 か月ずつ動かしても、開始から足し直さない（1 本あたり 64 期間まで。1 回の展開は 600 本で 100ms 未満）', async () => {
     vi.resetModules();
     const r = await import('../src/recurrence');
     const parsed = r.parseRrule('FREQ=MONTHLY;COUNT=1000');
     if (!parsed.ok) throw new Error(parsed.message);
     for (const s of starts) r.ruleStarts(parsed.rule, s, wall('2026-09-28'), wall('2026-10-01'));
     for (const month of ['2026-10-28', '2026-11-28', '2026-12-28']) {
+      // 仕事の数で確かめる（区切りを覚えないと、1 本あたり開始からの 670 期間ほどを足し直す。4 回目 F3・F5）
+      const before = r.recurrenceWorkForTest().periodSteps;
       const t0 = performance.now();
       for (const s of starts) r.ruleStarts(parsed.rule, s, wall(month), wall(addDays(month, 3)));
+      expect([month, r.recurrenceWorkForTest().periodSteps - before <= 600 * 64]).toEqual([
+        month,
+        true,
+      ]);
       // 直す前は 1 か月動かすたびにおよそ 0.27 秒
       expect([month, performance.now() - t0 < 100]).toEqual([month, true]);
     }
   });
+});
+
+describe('総点検のレビュー（4 回目）F1・F2: 繰り返しの上限（家族で 500 件）いっぱいでも、覚えたものが入れ替わり続けない', () => {
+  const pad = (n: number) => String(n).padStart(2, '0');
+  // 形から判定できない（周期をたどる）規則と、COUNT の毎月の規則を、形をすべて変えて 500 本
+  const triples: [number, number, number][] = [];
+  for (let a = 1; a <= 28 && triples.length < 500; a++)
+    for (let b = a + 1; b <= 28 && triples.length < 500; b++)
+      for (let c = b + 1; c <= 28 && triples.length < 500; c++) triples.push([a, b, c]);
+  const starts = triples.map((_, i) =>
+    wall(addDays('1970-01-05', i * 7), `${pad(6 + (i % 12))}:${pad(i % 60)}`),
+  );
+
+  it('F1 形から判定できない 500 本の規則: 2 回目の展開は 300ms 未満', async () => {
+    vi.resetModules();
+    const r = await import('../src/recurrence');
+    const rules = triples.map(([a, b, c]) => {
+      const p = r.parseRrule(
+        `FREQ=MONTHLY;BYDAY=MO,TU,WE,TH,FR;BYMONTHDAY=${a},${b},${c};BYSETPOS=1`,
+      );
+      if (!p.ok) throw new Error(p.message);
+      return p.rule;
+    });
+    const window = [wall('2026-09-28'), wall('2026-10-01')] as const;
+    rules.forEach((rule, i) => r.ruleStarts(rule, starts[i] as Wall, ...window));
+    const t0 = performance.now();
+    rules.forEach((rule, i) => r.ruleStarts(rule, starts[i] as Wall, ...window));
+    expect(performance.now() - t0).toBeLessThan(300);
+  }, 30_000);
+
+  it('F2 形がすべて違う COUNT の毎月の規則 500 本: 2 回目の展開は期間ごとの回の数を数え直さない', async () => {
+    vi.resetModules();
+    const r = await import('../src/recurrence');
+    const rules = triples.map(([a, b, c]) => {
+      const p = r.parseRrule(`FREQ=MONTHLY;BYMONTHDAY=${a},${b},-${c};COUNT=1000`);
+      if (!p.ok) throw new Error(p.message);
+      return p.rule;
+    });
+    const window = [wall('2026-09-28'), wall('2026-10-01')] as const;
+    rules.forEach((rule, i) => r.ruleStarts(rule, starts[i] as Wall, ...window));
+    const before = r.recurrenceWorkForTest().probes;
+    const t0 = performance.now();
+    rules.forEach((rule, i) => r.ruleStarts(rule, starts[i] as Wall, ...window));
+    expect(r.recurrenceWorkForTest().probes - before).toBe(0);
+    expect(performance.now() - t0).toBeLessThan(300);
+  }, 30_000);
 });
