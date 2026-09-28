@@ -1,5 +1,5 @@
 # 進み具合
-今: 最終確認 / 次にやること: RUNBOOK の最終確認のコマンド（pnpm install --frozen-lockfile・pnpm check・pnpm build・pnpm test:e2e・docker compose build・up -d --wait・exec app node dist/cli.js feed-token list・down）→ 受け入れ基準の見直し → 最終報告
+今: 最終確認 / 次にやること: 総点検の修正のレビュー（ワークフロー wf_591760cc-3aa。途中で止めた。再開は resumeFromRunId で。レビュー 3 本は終わり、反証の途中）の結果を反映 → RUNBOOK の最終確認のコマンド（pnpm install --frozen-lockfile・pnpm check・pnpm build・pnpm test:e2e・docker compose build・up -d --wait・exec app node dist/cli.js feed-token list・down）→ 受け入れ基準の見直し → 最終報告
 
 ## ステップ
 | ステップ | 状態（未着手・作業中・完了） | タグ | メモ |
@@ -153,7 +153,7 @@
 - D35: 通知の細則（この端末の印、送信の記録と再送、まとめ・予告、家族の変更のまとめ待ち、通知の文と url、テスト通知、鍵がないとき、自分への通知の候補と保存、SW の知らせ、E2E の push）
 - D36: Phase 4 のレビューで決めた通知の細則（自分で止めた印、まとめ待ちの件名の見え方と消し方・同じ人だけまとめる・読んだ行だけ片づける、renotify、終日⇔時刻ありの通知と行の書き換え、最初の回の「これ以降」、公開鍵の状態と文言、ready を待たない、翌日 0:00）
 - D38: 仕上げの細則（空き時間は今日から、検索の範囲と並び、書き出しは fetch だけ・JSON と ICS の形、バックアップと掃除の時刻、同期の gzip、これからの一覧は 140 日まで、ビルドの検査）
-- D39: 総点検で決めたこと（/api/* の GET も X-Ito-Client と same-origin、本文を読んでから本人を確かめる・家族の管理は確かめ直す、名前の見えない文字、「これ以降」で公開・非公開にしたときの履歴と消した例外、フィードの人の端末の判定と失敗の WARN、SW の遷移の除外、設置後の確認で連携キーをコマンドラインに書かない）
+- D39: 総点検で決めたこと（/api/* の GET も X-Ito-Client と same-origin、本文を読んでから本人を確かめる・家族の管理は確かめ直す、名前の見えない文字、「これ以降」で公開・非公開にしたときの履歴と消した例外、フィードの人の端末の判定と失敗の WARN、SW の遷移の除外、設置後の確認で連携キーをコマンドラインに書かない、回の出ない繰り返しを拒み開始を送って展開する、Web Push の送り先はプッシュサービスだけ・1 人 10 台・送信の締め切り、変更・削除・復元は 120 件/分・取り消した回は 1000 まで、1 文字と全体の長さ、依存の監査は開発用も含む）
 - D37: 一言入力の細則（found と reason、先に選んだ日を残す、回数制限はルール解析、AI の出力の検証、公式 SDK・再試行なし、例の作り方、時間帯、重なりの警告、ai:eval）
 
 ## 後で足すテスト
@@ -163,6 +163,9 @@
 - **本番の設置とアクセス制御（Tailscale のポリシー）の確かめ**（SPEC §18 T1・T2・T12・T16、§20）。管理画面と実際の tailnet が要るので持ち主の作業。
   - 根拠: 手元では compose の設定（カーネルモード・network_mode・127.0.0.1・AllowFunnel: false）を `docker compose config`・`docker inspect` で確かめ、アプリ側の ID ヘッダ・CSRF・連携キーの検査はテスト（server audit-routes.test.ts ほか）で確かめた。ACL と、別の端末から :8787 に届かないことは実物がないと確かめられない
   - 持ち主がやること: README「本番の立て方」のとおりに設置し、「設置したあとの確かめ方（アクセス制御）」の 4 項目を行う。ホスト名・tailnet 名に家族の名前を使わない
+- **いえボードとつなぐ（連携キーの発行）**（SPEC §13.1・§20）。本物の連携キーは本番のサーバーで作り、いえボードの設定に書く必要があるので持ち主の作業（こちらでは本物の秘密情報を使わない）。
+  - 根拠: 手元と Docker で、キーを表示しないスクリプトが キーなし 401・キーあり 200・止めたあと 401 を確かめた（`docker compose exec -T app node --input-type=module - < ../scripts/feed-check-inner.mjs`）。`feed-token list` はキーを出さない（EXIT=0）
+  - 持ち主がやること: 本番で `docker compose exec app node dist/cli.js feed-token create --name いえボード` → 出たキーをいえボードの `config/secrets.yaml` に書く（README「いえボードとつなぐ」）。いえボードは `tag:ieboard` の端末で動かす
 - **ICS を iPhone のカレンダーに取り込む**（SPEC §23 Phase 7）。実機が要るので持ち主の作業。
   - 根拠: 形は server export.test.ts（VTIMEZONE・終日の DTEND・RRULE の UTC の UNTIL・EXDATE・RECURRENCE-ID・75 オクテットの折り返し）と E2E phase7.spec.ts（iPhone の共有シートに VCALENDAR を渡す）で確かめた
   - 持ち主がやること: 設定 →「予定を書き出す」→「ICS（カレンダーに取り込む）」→ 共有シートでカレンダーに追加し、繰り返し・終日・この回だけ変更した回が正しく出るかを見る
