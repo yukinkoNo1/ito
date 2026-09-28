@@ -243,7 +243,30 @@ describe('検索は文字で絞ってから展開する（総点検のレビュ�
     expect(found.flatMap((g) => g.items)).toHaveLength(50);
   });
 
-  it('決まった乱数で作った予定（終日の「この回だけ変更」・遠くへ動かした回・取り消した回・同じ回の例外が 2 行・担当の違う例外・全員の予定・だれの予定でもない人の絞り込み）で、前のやり方と結果が同じ（7 回目 I1・I2）', () => {
+  it('少し前・半年ほど前に UNTIL で終わった合う繰り返しが 1,600 本あっても、1 回の検索は 100ms 未満（過ぎた回は規則の終わりから探す）', () => {
+    const owners = [M.papa, M.mama, M.yuki, M.haru];
+    for (const ago of [10, 60, 200]) {
+      const until = addDays('2026-09-28', -ago).replaceAll('-', '');
+      const events = Array.from({ length: 1600 }, (_, i) => {
+        const owner = owners[i % 4] as string;
+        return ev({
+          title: `ごみ ${i}`,
+          rrule: `FREQ=DAILY;UNTIL=${until}T235959`,
+          startAt: '2024-06-03T07:00:00+09:00',
+          ownerId: owner,
+          memberIds: [owner],
+        });
+      });
+      searchOccurrences(events, 'ごみ 1', null, ctx);
+      const t0 = perf.now();
+      const found = searchOccurrences(events, 'ごみ', null, ctx);
+      // 直す前は 170〜760ms（今日から前へ広げる窓で、終わったあとの空の期間ごと展開していた）
+      expect([ago, perf.now() - t0 < 100]).toEqual([ago, true]);
+      expect(found.flatMap((g) => g.items)).toHaveLength(50);
+    }
+  });
+
+  it('決まった乱数で作った予定（終日の「この回だけ変更」・遠くへ動かした回・取り消した回・同じ回の例外が 2 行・担当の違う例外・全員の予定・だれの予定でもない人の絞り込み）・UNTIL で終わる規則で、前のやり方と結果が同じ（7 回目 I1・I2）', () => {
     let seed = 7;
     const rand = (n: number) => {
       seed = (seed * 1103515245 + 12345) % 2147483648;
@@ -259,6 +282,12 @@ describe('検索は文字で絞ってから展開する（総点検のレビュ�
       'FREQ=DAILY;INTERVAL=3',
       null,
     ];
+    // UNTIL で終わる規則（終わりは開始の 0〜500 日あと。今日より前に終わるものも、1 年より前に終わるものもある）
+    const ruleOf = (k: number, day: string, allDay: boolean): string | null => {
+      if (k < rules.length) return rules[k] ?? null;
+      const until = addDays(day, rand(500)).replaceAll('-', '');
+      return `FREQ=${k === rules.length ? 'DAILY' : 'WEEKLY'};UNTIL=${allDay ? until : `${until}T235959`}`;
+    };
     for (let round = 0; round < 30; round++) {
       const events: LocalEvent[] = [];
       for (let i = 0; i < 30; i++) {
@@ -273,7 +302,7 @@ describe('検索は文字で絞ってから展開する（総点検のレビュ�
           ...(allDay
             ? { startAt: undefined, startDate: day, endDate: addDays(day, rand(3)) }
             : { startAt: `${day}T${time}:00+09:00` }),
-          rrule: rules[rand(rules.length)] ?? null,
+          rrule: ruleOf(rand(rules.length + 2), day, allDay),
           ownerId: owner,
           memberIds: [owner],
           forEveryone: rand(8) === 0,

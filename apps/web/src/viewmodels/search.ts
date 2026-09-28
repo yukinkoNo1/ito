@@ -9,6 +9,7 @@ import {
   occurrenceTimes,
   overlapsRange,
   parseRrule,
+  untilDate,
   WEEKDAY_LABELS,
   weekdayOf,
 } from '@ito/core';
@@ -66,6 +67,14 @@ function pick(
     if (!best || o.startMs > best.startMs) best = o;
   }
   return best;
+}
+
+/** 過ぎた回を探す窓の起点（規則が UNTIL で today より前に終わっていれば、その翌日。そうでなければ today） */
+function backwardAnchor(master: LocalEvent, today: string): string {
+  const parsed = master.rrule ? parseRrule(master.rrule) : null;
+  if (!parsed?.ok || parsed.rule.until === null) return today;
+  const next = addDays(untilDate(parsed.rule.until), 1);
+  return next < today ? next : today;
 }
 
 /**
@@ -160,8 +169,12 @@ export function searchOccurrences(
         if (found) break;
       }
       if (!found) {
+        // 過ぎた回の窓は、規則が UNTIL で今日より前に終わっていればその翌日から前へ広げる（終わったあとの空の期間を
+        // 展開しない）。窓の始まりがどこでも上の理由で答えは同じで、最後の窓はいつも前後 1 年
+        const end = backwardAnchor(master, ctx.today);
         for (const d of BACKWARD_WINDOWS) {
-          const from = fromJst(addDays(ctx.today, -d));
+          const from =
+            d === SEARCH_RANGE_DAYS ? rangeFrom : Math.max(rangeFrom, fromJst(addDays(end, -d)));
           // 今日ちょうどに始まって終わる回も過ぎた回なので、終わりは今日の 0:00 の直後まで
           const best = pick(
             expandAll(rows, from, todayMs + 1).filter((o) => !upcoming(o) && ok(o)),
