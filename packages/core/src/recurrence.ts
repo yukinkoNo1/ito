@@ -86,6 +86,9 @@ function fail(message: string): RuleResult {
   return { ok: false, message };
 }
 
+/** BYSETPOS の値の数の上限（§24 D41） */
+const MAX_SETPOS = 7;
+
 function intList(value: string, min: number, max: number): number[] | null {
   const out: number[] = [];
   for (const part of value.split(',')) {
@@ -201,6 +204,10 @@ export function parseRrule(input: string): RuleResult {
     if (!allowed) return fail(`この頻度では使えない指定です（${key}）`);
     const list = intList(value, min, max);
     if (!list) return fail('繰り返しの指定が正しくありません');
+    // BYSETPOS は期間ごとに「値の数 × その期間の日の数」の計算になるので 7 個まで（総点検のレビュー 5 回目 G3）
+    if (key === 'BYSETPOS' && list.length > MAX_SETPOS) {
+      return fail(`繰り返しの BYSETPOS は ${MAX_SETPOS} 個までです`);
+    }
     (rule[field] as number[]) = list;
   }
   const wkst = pairs.get('WKST');

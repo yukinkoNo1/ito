@@ -715,8 +715,14 @@ describe('総点検のレビュー（2 回目）D6: 時計が戻っても、失�
   });
 });
 
-describe('総点検のレビュー（4 回目）F1・F2: 繰り返しの予定は家族で 500 件まで（展開で覚えるものを上回らない）', () => {
-  function seedSeries(n: number, deleted = 0) {
+describe('総点検のレビュー（4 回目 F1・F2・5 回目 G1）: 繰り返しの予定は持ち主ごとに 100 件まで（展開で覚えるものを上回らない。ほかの人を締め出さない）', () => {
+  function seedSeries(
+    n: number,
+    deleted = 0,
+    who: 'papa' | 'mama' | 'yuki' = 'papa',
+    privately = false,
+  ) {
+    const owner = IDS[who];
     for (let i = 0; i < n + deleted; i++) {
       const at = fromJst(addDays('2026-01-01', i % 300), '09:00');
       const gone = i >= n;
@@ -735,14 +741,14 @@ describe('総点検のレビュー（4 回目）F1・F2: 繰り返しの予定�
         exdates: [],
         parentId: null,
         recurrenceId: null,
-        memberIds: [IDS.papa],
+        memberIds: [owner],
         forEveryone: false,
         busy: true,
-        visibility: 'family',
-        ownerId: IDS.papa,
-        createdBy: IDS.papa,
-        updatedBy: IDS.papa,
-        deletedBy: gone ? IDS.papa : null,
+        visibility: privately ? 'private' : 'family',
+        ownerId: owner,
+        createdBy: owner,
+        updatedBy: owner,
+        deletedBy: gone ? owner : null,
         createdAt: NOW - 1000,
         updatedAt: NOW - 1000,
         deletedAt: gone ? NOW - 1000 : null,
@@ -750,12 +756,12 @@ describe('総点検のレビュー（4 回目）F1・F2: 繰り返しの予定�
     }
   }
 
-  it('500 件あるとき、繰り返しの予定を作る・繰り返しにする・「これ以降」で分ける・ゴミ箱から戻すのは 409 series_limit。繰り返しでない予定は作れる', async () => {
+  it('持ち主の繰り返しが 100 件あるとき、その人の繰り返しを作る・繰り返しにする・「これ以降」で分ける・ゴミ箱から戻すのは 409 series_limit。繰り返しでない予定は作れる', async () => {
     ctx = createTestContext(devEnv(), { now: NOW });
     seedFamily(ctx);
-    seedSeries(499, 1);
+    seedSeries(99, 1, 'mama');
     const one = await createEvent(ctx, 'mama', {
-      title: '500 件目',
+      title: '100 件目',
       allDay: true,
       startDate: '2026-10-01',
       rrule: 'FREQ=MONTHLY',
@@ -763,7 +769,7 @@ describe('総点検のレビュー（4 回目）F1・F2: 繰り返しの予定�
     });
     expect(one.res.status).toBe(201);
     const over = await createEvent(ctx, 'mama', {
-      title: '501 件目',
+      title: '101 件目',
       allDay: true,
       startDate: '2026-10-01',
       rrule: 'FREQ=MONTHLY',
@@ -819,5 +825,42 @@ describe('総点検のレビュー（4 回目）F1・F2: 繰り返しの予定�
       body: {},
     });
     expect(restored.status).toBe(409);
+    // ほかの人は自分の繰り返しを作れる
+    const others = await createEvent(ctx, 'papa', {
+      title: 'お父さんの繰り返し',
+      allDay: true,
+      startDate: '2026-10-01',
+      rrule: 'FREQ=MONTHLY',
+      memberIds: [IDS.papa],
+    });
+    expect(others.res.status).toBe(201);
+  });
+
+  it('G1 ほかの人が非公開の繰り返しで自分の上限を埋めても（その人を無効にしても）、自分の繰り返しは作れる', async () => {
+    ctx = createTestContext(devEnv(), { now: NOW });
+    seedFamily(ctx);
+    seedSeries(100, 0, 'yuki', true);
+    const yukis = await createEvent(ctx, 'yuki', {
+      title: 'ゆきの 101 件目',
+      allDay: true,
+      startDate: '2026-10-05',
+      rrule: 'FREQ=WEEKLY',
+      memberIds: [IDS.yuki],
+      visibility: 'private',
+    });
+    expect(yukis.res.status).toBe(409);
+    const disabled = await send(ctx, 'PATCH', `/api/members/${IDS.yuki}`, {
+      headers: as('papa'),
+      body: { disabled: true },
+    });
+    expect(disabled.status).toBe(200);
+    const mine = await createEvent(ctx, 'mama', {
+      title: '習い事',
+      allDay: true,
+      startDate: '2026-10-05',
+      rrule: 'FREQ=WEEKLY',
+      memberIds: [IDS.mama],
+    });
+    expect(mine.res.status).toBe(201);
   });
 });

@@ -54,6 +54,12 @@ export function searchOccurrences(
   const terms = searchTerms(query);
   if (terms.length === 0) return [];
   const visible = events.filter((e) => canSeeContent(e, ctx.meId));
+  // 先に文字で絞る: 本体か「この回だけ変更」のどれかが合うシリーズ（と、繰り返しでない予定）だけを展開する
+  // （1 年分を全部展開してから探すと、繰り返しが多いと 1 文字ごとに秒単位になる。総点検のレビュー 5 回目 G2）。
+  // 回ごとの中身の一致は、展開したあとでも確かめる
+  const hit = new Set<string>();
+  for (const e of visible) if (matches(e, terms)) hit.add(e.parentId ?? e.id);
+  const candidates = visible.filter((e) => hit.has(e.parentId ?? e.id));
   const from = fromJst(addDays(ctx.today, -SEARCH_RANGE_DAYS));
   const to = fromJst(addDays(ctx.today, SEARCH_RANGE_DAYS + 1));
   const todayMs = fromJst(ctx.today);
@@ -66,7 +72,7 @@ export function searchOccurrences(
     string,
     { o: Occurrence<LocalEvent>; vm: ReturnType<typeof toOccurrenceVM> }
   >();
-  for (const o of expandAll(visible, from, to)) {
+  for (const o of expandAll(candidates, from, to)) {
     if (!matches(o.event, terms)) continue;
     const vm = toOccurrenceVM(o, ctx);
     if (!matchesFilter(vm, filter)) continue;

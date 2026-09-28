@@ -49,10 +49,14 @@ export function TrashContainer() {
       onBack={() => goBack(navigate, '/settings')}
       status={status}
       onRestore={(eventId) =>
-        void store.restoreEvent(eventId).then((ok) => {
+        void store.restoreEvent(eventId).then((result) => {
           showToast({
-            kind: ok ? 'info' : 'error',
-            message: ok ? '予定を元に戻しました' : '元に戻せませんでした',
+            kind: result.ok ? 'info' : 'error',
+            message: result.ok
+              ? '予定を元に戻しました'
+              : result.reason
+                ? `元に戻せませんでした（${result.reason}）`
+                : '元に戻せませんでした',
             actionLabel: null,
           });
           void load();

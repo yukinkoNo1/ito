@@ -1,6 +1,9 @@
-import { addDays, fromJst } from '@ito/core';
+import 'fake-indexeddb/auto';
+import { addDays, fakeClock, fromJst } from '@ito/core';
 import { describe, expect, it } from 'vitest';
 import type { Fetcher } from '../src/data/api';
+import { ItoDb } from '../src/data/db';
+import { DataStore } from '../src/data/store';
 import { downloadExport, fileNameOf } from '../src/pwa/export';
 import { isDeniedNavigation } from '../src/pwa/nav-denylist';
 import { splitLinks } from '../src/ui/labels';
@@ -32,6 +35,38 @@ const ctx: VmContext = {
   members,
   freshSince: null,
 };
+
+describe('検索は文字で絞ってから展開する（総点検のレビュー 5 回目 G2）', () => {
+  const perf = (globalThis as unknown as { performance: { now(): number } }).performance;
+  it('毎日の繰り返しが 800 本あっても、合うものがない検索は 100ms 未満', () => {
+    const events = Array.from({ length: 800 }, (_, i) =>
+      ev({ title: `ごみ ${i}`, rrule: 'FREQ=DAILY', startAt: '2026-01-05T07:00:00+09:00' }),
+    );
+    // 1 回目はモジュールの読み込みなどを含むので、2 回目から測る
+    searchOccurrences(events, 'ごみ 1', null, ctx);
+    const t0 = perf.now();
+    for (const q of ['お', 'おか', 'おかし'])
+      expect(searchOccurrences(events, q, null, ctx)).toEqual([]);
+    // 直す前は 1 回およそ 1.2 秒（1 年分を全部展開してから探す）
+    expect(perf.now() - t0).toBeLessThan(100);
+  });
+
+  it('本体は合わず「この回だけ変更」の回だけが合うシリーズも見つかる', () => {
+    const series = ev({
+      title: '水泳',
+      rrule: 'FREQ=WEEKLY',
+      startAt: '2026-09-02T17:00:00+09:00',
+    });
+    const exception = ev({
+      title: '水泳（記録会）',
+      parentId: series.id,
+      recurrenceId: '2026-10-07T17:00',
+      startAt: '2026-10-07T17:00:00+09:00',
+    });
+    const found = searchOccurrences([series, exception], '記録会', null, ctx);
+    expect(found.flatMap((g) => g.items.map((i) => i.title))).toEqual(['水泳（記録会）']);
+  });
+});
 
 describe('検索（§6 S-10）', () => {
   const dentist = ev({
@@ -496,5 +531,39 @@ describe('これからの一覧の描き直しを小さくする（§19。§24 D
       expected,
       expected,
     ]);
+  });
+});
+
+describe('ゴミ箱から戻せないときは理由を出す（総点検のレビュー 5 回目 G4）', () => {
+  it('繰り返しの上限（409 series_limit）で断られたら、本文の理由を返す。通信できなければ理由なし', async () => {
+    const db = new ItoDb('phase7-g4');
+    let online = true;
+    const fetcher: Fetcher = async (path, init) => {
+      if (!online) throw new TypeError('Failed to fetch');
+      if (init.method === 'POST' && path.endsWith('/restore')) {
+        return new Response(
+          JSON.stringify({
+            type: 'about:blank',
+            title: '繰り返しの予定の数の上限に達しています',
+            status: 409,
+            code: 'series_limit',
+            detail:
+              '繰り返しの予定は 1 人 100 件までです。使っていない繰り返しの予定を削除してください',
+          }),
+          { status: 409, headers: { 'content-type': 'application/problem+json' } },
+        );
+      }
+      return new Response(null, { status: 404 });
+    };
+    const store = new DataStore(db, fakeClock(fromJst('2026-09-28', '09:00')), fetcher);
+    const refused = await store.restoreEvent('0192f5b1-0000-7000-8000-000000000999');
+    expect(refused).toEqual({ ok: false, reason: expect.stringContaining('100 件') });
+    online = false;
+    expect(await store.restoreEvent('0192f5b1-0000-7000-8000-000000000999')).toEqual({
+      ok: false,
+      reason: null,
+    });
+    db.close();
+    await db.delete();
   });
 });

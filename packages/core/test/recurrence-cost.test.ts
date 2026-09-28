@@ -543,6 +543,14 @@ describe('総点検のレビュー（3 回目）E1・E2: COUNT の毎月・毎�
     // 最初の期間（開始より後）を 1 本ずつ 600 回と、期間の種類（開始の日で決まる BYMONTHDAY の 31 通りの形 ×
     // およそ 98 種類）。時刻を鍵に入れると 600 本 × 98 種類＝およそ 58,800 回になる
     expect(r.recurrenceWorkForTest().probes - first).toBeLessThan(5000);
+    // 間隔も回の数に関係しないので鍵に入れない（間隔を変えた 600 本でも同じ。5 回目 G6）
+    const second = r.recurrenceWorkForTest().probes;
+    for (const [i, s] of starts.entries()) {
+      const p = r.parseRrule(`FREQ=MONTHLY;INTERVAL=${1 + (i % 12)};COUNT=1000`);
+      if (!p.ok) throw new Error(p.message);
+      r.ruleStarts(p.rule, s, wall('2026-09-28'), wall('2026-10-01'));
+    }
+    expect(r.recurrenceWorkForTest().probes - second).toBeLessThan(1000);
     for (const text of [
       'FREQ=MONTHLY;COUNT=1000',
       'FREQ=MONTHLY;BYDAY=MO,TU,WE,TH,FR;BYSETPOS=-1;COUNT=1000',
@@ -579,18 +587,18 @@ describe('総点検のレビュー（3 回目）E1・E2: COUNT の毎月・毎�
   });
 });
 
-describe('総点検のレビュー（4 回目）F1・F2: 繰り返しの上限（家族で 500 件）いっぱいでも、覚えたものが入れ替わり続けない', () => {
+describe('総点検のレビュー（4 回目）F1・F2: 繰り返しの上限（1 人 100 件・家族は 8 人まで＝800 件）いっぱいでも、覚えたものが入れ替わり続けない', () => {
   const pad = (n: number) => String(n).padStart(2, '0');
-  // 形から判定できない（周期をたどる）規則と、COUNT の毎月の規則を、形をすべて変えて 500 本
+  // 形から判定できない（周期をたどる）規則と、COUNT の毎月の規則を、形をすべて変えて 800 本
   const triples: [number, number, number][] = [];
-  for (let a = 1; a <= 28 && triples.length < 500; a++)
-    for (let b = a + 1; b <= 28 && triples.length < 500; b++)
-      for (let c = b + 1; c <= 28 && triples.length < 500; c++) triples.push([a, b, c]);
+  for (let a = 1; a <= 28 && triples.length < 800; a++)
+    for (let b = a + 1; b <= 28 && triples.length < 800; b++)
+      for (let c = b + 1; c <= 28 && triples.length < 800; c++) triples.push([a, b, c]);
   const starts = triples.map((_, i) =>
     wall(addDays('1970-01-05', i * 7), `${pad(6 + (i % 12))}:${pad(i % 60)}`),
   );
 
-  it('F1 形から判定できない 500 本の規則: 2 回目の展開は 300ms 未満', async () => {
+  it('F1 形から判定できない 800 本の規則: 2 回目の展開は 300ms 未満', async () => {
     vi.resetModules();
     const r = await import('../src/recurrence');
     const rules = triples.map(([a, b, c]) => {
@@ -607,7 +615,7 @@ describe('総点検のレビュー（4 回目）F1・F2: 繰り返しの上限�
     expect(performance.now() - t0).toBeLessThan(300);
   }, 30_000);
 
-  it('F2 形がすべて違う COUNT の毎月の規則 500 本: 2 回目の展開は期間ごとの回の数を数え直さない', async () => {
+  it('F2 形がすべて違う COUNT の毎月の規則 800 本: 2 回目の展開は期間ごとの回の数を数え直さない', async () => {
     vi.resetModules();
     const r = await import('../src/recurrence');
     const rules = triples.map(([a, b, c]) => {
@@ -623,4 +631,16 @@ describe('総点検のレビュー（4 回目）F1・F2: 繰り返しの上限�
     expect(r.recurrenceWorkForTest().probes - before).toBe(0);
     expect(performance.now() - t0).toBeLessThan(300);
   }, 30_000);
+});
+
+describe('総点検のレビュー（5 回目）G3: BYSETPOS は 7 個まで（1 期間ごとの計算を重くしない）', () => {
+  it('BYSETPOS の値が 8 個以上の規則は保存できない。7 個までは使える', () => {
+    const long = parseRrule(
+      'FREQ=YEARLY;BYDAY=MO,TU,WE,TH,FR,SA,SU;BYSETPOS=1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20',
+    );
+    expect(long.ok).toBe(false);
+    expect(parseRrule('FREQ=MONTHLY;BYDAY=MO,TU,WE,TH,FR;BYSETPOS=1,2,3,4,5,6,7,8').ok).toBe(false);
+    expect(parseRrule('FREQ=MONTHLY;BYDAY=MO,TU,WE,TH,FR;BYSETPOS=1,2,3,4,5,-2,-1').ok).toBe(true);
+    expect(parseRrule('FREQ=MONTHLY;BYDAY=MO,TU,WE,TH,FR;BYSETPOS=-1').ok).toBe(true);
+  });
 });

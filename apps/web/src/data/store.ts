@@ -1147,19 +1147,35 @@ export class DataStore {
   }
 
   /** ゴミ箱から復元（オンラインで） */
-  async restoreEvent(eventId: string): Promise<boolean> {
+  /**
+   * ゴミ箱から戻す。戻せなかったときは、サーバーが理由（problem+json の detail。繰り返しの上限など）を返していれば
+   * それを添える（総点検のレビュー 5 回目 G4）
+   */
+  async restoreEvent(
+    eventId: string,
+  ): Promise<{ ok: true } | { ok: false; reason: string | null }> {
     try {
       const res = await apiRequest('POST', `/api/events/${eventId}/restore`, {
         headers: { 'Idempotency-Key': uuidv7(this.clock.now()) },
         fetcher: this.fetcher,
       });
-      if (res.status !== 200) return false;
+      if (res.status !== 200) {
+        const body = res.body;
+        const reason =
+          typeof body === 'object' &&
+          body !== null &&
+          'detail' in body &&
+          typeof (body as { detail: unknown }).detail === 'string'
+            ? (body as { detail: string }).detail
+            : null;
+        return { ok: false, reason };
+      }
       const e = extractEvent(res.body);
       if (e) await this.db.events.put({ ...e, sync: 'synced' });
       void this.syncNow();
-      return true;
+      return { ok: true };
     } catch {
-      return false;
+      return { ok: false, reason: null };
     }
   }
 
