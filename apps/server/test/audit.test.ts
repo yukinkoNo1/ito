@@ -1012,6 +1012,60 @@ describe('総点検のレビュー（4 回目 F1・F2・5 回目 G1）: 繰り�
     expect(activeNow).toHaveLength(100);
   });
 
+  it('8 回目 J2 終わったものを含めて 400 件のとき、「これ以降」で繰り返しを分けるのは 409（今日から分けても）。繰り返しを外すなら通る', async () => {
+    ctx = createTestContext(devEnv(), { now: NOW });
+    seedFamily(ctx);
+    seedSeries(399, 0, 'mama', false, 'FREQ=WEEKLY;UNTIL=20250101T235959', '2024-01-01');
+    const lesson = await createEvent(ctx, 'mama', {
+      title: '習い事',
+      allDay: true,
+      startDate: '2026-09-06',
+      rrule: 'FREQ=WEEKLY',
+      memberIds: [IDS.mama],
+    });
+    expect(lesson.res.status).toBe(201);
+    const total = () =>
+      ctx.database.db
+        .select()
+        .from(events)
+        .all()
+        .filter(
+          (e) =>
+            e.ownerId === IDS.mama &&
+            e.rrule !== null &&
+            e.parentId === null &&
+            e.deletedAt === null,
+        ).length;
+    expect(total()).toBe(400);
+    const split = (rid: string, key: string, changes: Record<string, unknown>) =>
+      send(ctx, 'PATCH', `/api/events/${lesson.event.id}`, {
+        headers: {
+          ...as('mama'),
+          'if-match': String(lesson.event.version),
+          'idempotency-key': key,
+        },
+        body: {
+          scope: 'following',
+          recurrenceId: rid,
+          exceptionId: uuidv7(NOW + 80 + key.length),
+          changes,
+        },
+      });
+    for (const [rid, key] of [
+      ['2026-10-04', 'j2-1'],
+      ['2026-09-27', 'j2-22'],
+    ] as const) {
+      const res = await split(rid, key, { title: '後半' });
+      expect(res.status).toBe(409);
+      expect(((await res.json()) as { code: string }).code).toBe('series_limit');
+      expect(total()).toBe(400);
+    }
+    // 後ろを繰り返しでない予定にするならシリーズは増えない
+    const unrepeat = await split('2026-10-04', 'j2-333', { rrule: null });
+    expect(unrepeat.status).toBe(200);
+    expect(total()).toBe(400);
+  });
+
   it('7 回目 I4 終わったものを含めて 400 件のとき、終わった繰り返しの件名を直すのは通る（直す行を 2 回数えない）', async () => {
     ctx = createTestContext(devEnv(), { now: NOW });
     seedFamily(ctx);

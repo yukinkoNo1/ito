@@ -180,10 +180,14 @@ export function searchOccurrences(
             expandAll(rows, from, todayMs + 1).filter((o) => !upcoming(o) && ok(o)),
             upcoming,
           );
-          if (best && (best.startMs > from || d === SEARCH_RANGE_DAYS)) {
+          // 1 年の範囲の始まりで切った窓は最後の窓と同じなので、答えがあってもなくてもここで終わる（同じ範囲を
+          // 何度も展開しない。総点検のレビュー 8 回目 J1）
+          const last = from === rangeFrom;
+          if (best && (best.startMs > from || last)) {
             found = best;
             break;
           }
+          if (last) break;
         }
       }
     }
