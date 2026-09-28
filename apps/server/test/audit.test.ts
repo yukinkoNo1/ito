@@ -797,6 +797,17 @@ describe('総点検のレビュー（4 回目）F1・F2: 繰り返しの予定�
       },
     });
     expect(split.status).toBe(409);
+    // 「これ以降」で繰り返しを外す（新しい行は繰り返しでない）ならシリーズは増えないので、上限でも変えられる
+    const unrepeat = await send(ctx, 'PATCH', `/api/events/${one.event.id}`, {
+      headers: { ...as('mama'), 'if-match': String(one.event.version), 'idempotency-key': 'f1-4' },
+      body: {
+        scope: 'following',
+        recurrenceId: '2026-12-01',
+        exceptionId: uuidv7(NOW + 98),
+        changes: { rrule: null },
+      },
+    });
+    expect(unrepeat.status).toBe(200);
     const trashed = ctx.database.db
       .select()
       .from(events)
