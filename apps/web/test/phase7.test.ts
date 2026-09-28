@@ -93,9 +93,11 @@ function referenceSearch(
     .map(({ vm }) => ({ dateLabel: vm.startDate, items: [vm] }));
 }
 
-/** 比べやすい形（日付の見出しをほどいて、回の key と日付の並びにする） */
+/** 比べやすい形（日付の見出しをほどいて、回の key・日付・時刻・件名の並びにする。同じ回のどの行を出したかも比べる） */
 function flat(groups: SearchGroupVM[]): string[] {
-  return groups.flatMap((g) => g.items.map((i) => `${i.key}|${i.startDate}`));
+  return groups.flatMap((g) =>
+    g.items.map((i) => `${i.key}|${i.startDate}|${i.startTime ?? ''}|${i.title ?? ''}`),
+  );
 }
 
 describe('検索は文字で絞ってから展開する（総点検のレビュー 5 回目 G2）', () => {
@@ -136,7 +138,8 @@ describe('検索は文字で絞ってから展開する（総点検のレビュ�
     let seed = 99;
     const rand = (n: number) => {
       seed = (seed * 1103515245 + 12345) % 2147483648;
-      return seed % n;
+      // 下の桁は周期が短い（2 で割った余りは交互になる）ので、上の桁を使う
+      return Math.floor((seed / 2147483648) * n);
     };
     const words = ['歯医者', '塾', 'サッカー', '買い物', '病院', '会議'];
     const owners = [M.papa, M.mama, M.yuki];
@@ -188,6 +191,135 @@ describe('検索は文字で絞ってから展開する（総点検のレビュ�
     }
   }, 120_000);
 
+  it('人で絞り込んだとき、合う文字の繰り返しがほかの人のもの 600 本・だれの予定でもない人でも、1 回の検索は 100ms 未満（7 回目 I1）', () => {
+    const owners = [M.papa, M.mama, M.yuki, M.haru];
+    const events = Array.from({ length: 800 }, (_, i) => {
+      const owner = owners[i % 4] as string;
+      return ev({
+        title: `ごみ ${i}`,
+        rrule: 'FREQ=DAILY',
+        startAt: '2026-01-05T07:00:00+09:00',
+        ownerId: owner,
+        memberIds: [owner],
+      });
+    });
+    searchOccurrences(events, 'ごみ 1', [M.yuki], ctx);
+    let t0 = perf.now();
+    expect(searchOccurrences(events, 'ごみ', [M.yuki], ctx).length).toBeGreaterThan(0);
+    // 直す前はおよそ 1.5 秒（人で合わないシリーズも前後の窓をすべて展開していた）
+    expect(perf.now() - t0).toBeLessThan(100);
+    const noHaru = events.filter((e) => e.ownerId !== M.haru);
+    searchOccurrences(noHaru, 'ごみ 1', [M.haru], ctx);
+    t0 = perf.now();
+    expect(searchOccurrences(noHaru, 'ごみ', [M.haru], ctx)).toEqual([]);
+    expect(perf.now() - t0).toBeLessThan(100);
+  });
+
+  it('本体は合わず、過ぎた「この回だけ変更」だけが合う繰り返しが 800 本あっても、1 回の検索は 100ms 未満（7 回目 I2）', () => {
+    const d0 = addDays('2026-09-28', -200);
+    const events: LocalEvent[] = [];
+    for (let i = 0; i < 800; i++) {
+      const m = ev({
+        title: `朝の支度 ${i}`,
+        rrule: 'FREQ=DAILY',
+        startAt: `${d0}T07:00:00+09:00`,
+      });
+      events.push(
+        m,
+        ev({
+          title: `朝の支度 ${i}（雨で中止）`,
+          parentId: m.id,
+          recurrenceId: `${d0}T07:00`,
+          startAt: `${d0}T07:00:00+09:00`,
+        }),
+      );
+    }
+    searchOccurrences(events, '雨', null, ctx);
+    const t0 = perf.now();
+    const found = searchOccurrences(events, '中止', null, ctx);
+    // 直す前はおよそ 1.9 秒（本体の規則を前後の窓すべてで展開していた）
+    expect(perf.now() - t0).toBeLessThan(100);
+    expect(flat(found)).toEqual(flat(referenceSearch(events, '中止', null, ctx)));
+    expect(found.flatMap((g) => g.items)).toHaveLength(50);
+  });
+
+  it('決まった乱数で作った予定（終日の「この回だけ変更」・遠くへ動かした回・取り消した回・同じ回の例外が 2 行・担当の違う例外・全員の予定・だれの予定でもない人の絞り込み）で、前のやり方と結果が同じ（7 回目 I1・I2）', () => {
+    let seed = 7;
+    const rand = (n: number) => {
+      seed = (seed * 1103515245 + 12345) % 2147483648;
+      // 下の桁は周期が短い（2 で割った余りは交互になる）ので、上の桁を使う
+      return Math.floor((seed / 2147483648) * n);
+    };
+    const words = ['歯医者', '塾', 'サッカー', '買い物', '病院', '会議'];
+    const owners = [M.papa, M.mama, M.yuki];
+    const rules = [
+      'FREQ=DAILY',
+      'FREQ=WEEKLY',
+      'FREQ=MONTHLY;COUNT=5',
+      'FREQ=DAILY;INTERVAL=3',
+      null,
+    ];
+    for (let round = 0; round < 30; round++) {
+      const events: LocalEvent[] = [];
+      for (let i = 0; i < 30; i++) {
+        const owner = owners[rand(3)] as string;
+        const allDay = rand(3) === 0;
+        const day = addDays('2026-09-28', rand(900) - 450);
+        const time = `${String(6 + rand(15)).padStart(2, '0')}:00`;
+        const base = ev({
+          title: `${words[rand(words.length)]} ${i}`,
+          location: rand(3) === 0 ? words[rand(words.length)] : null,
+          allDay,
+          ...(allDay
+            ? { startAt: undefined, startDate: day, endDate: addDays(day, rand(3)) }
+            : { startAt: `${day}T${time}:00+09:00` }),
+          rrule: rules[rand(rules.length)] ?? null,
+          ownerId: owner,
+          memberIds: [owner],
+          forEveryone: rand(8) === 0,
+          visibility: rand(5) === 0 ? 'private' : 'family',
+          exdates: [],
+        });
+        events.push(base);
+        if (!base.rrule || rand(3) === 0) continue;
+        // 例外の回（元の回の日は 0〜3 週あと。動かした先は前後 400 日のどこか）
+        const d = addDays(day, 7 * rand(4));
+        const rid = allDay ? d : `${d}T${time}`;
+        const to = rand(2) === 0 ? d : addDays('2026-09-28', rand(800) - 400);
+        const who = rand(3) === 0 ? (owners[rand(3)] as string) : owner;
+        const copies = rand(4) === 0 ? 2 : 1;
+        for (let c = 0; c < copies; c++) {
+          events.push(
+            ev({
+              title: `${words[rand(words.length)]}（変更 ${c}）`,
+              parentId: base.id,
+              recurrenceId: rid,
+              allDay,
+              ...(allDay
+                ? { startAt: undefined, startDate: to, endDate: to }
+                : { startAt: `${to}T12:00:00+09:00` }),
+              ownerId: owner,
+              memberIds: [who],
+              forEveryone: rand(10) === 0,
+              visibility: base.visibility,
+            }),
+          );
+        }
+        if (rand(4) === 0) base.exdates.push(rand(2) === 0 ? rid : allDay ? day : `${day}T${time}`);
+      }
+      for (const q of ['歯医者', '病院', '変更', '変更 1', 'サッカー 1', '会']) {
+        for (const f of [null, [], [M.mama], [M.haru], [M.papa, M.yuki]]) {
+          expect([round, q, f, flat(searchOccurrences(events, q, f, ctx))]).toEqual([
+            round,
+            q,
+            f,
+            flat(referenceSearch(events, q, f, ctx)),
+          ]);
+        }
+      }
+    }
+  }, 300_000);
+
   it('本体は合わず「この回だけ変更」の回だけが合うシリーズも見つかる', () => {
     const series = ev({
       title: '水泳',
@@ -225,7 +357,7 @@ describe('検索は文字で絞ってから展開する（総点検のレビュ�
       endDate: '2026-09-20',
     });
     const found = searchOccurrences([series, moved], '合宿', null, ctx);
-    expect(flat(found)).toEqual([`${series.id}@2026-09-12|2026-09-20`]);
+    expect(flat(found)).toEqual([`${series.id}@2026-09-12|2026-09-20||合宿`]);
     expect(flat(found)).toEqual(flat(referenceSearch([series, moved], '合宿', null, ctx)));
   });
 });

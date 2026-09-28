@@ -4,7 +4,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { events, members, pushSubscriptions } from '../src/db/schema';
 import { createFeedToken } from '../src/services/feed-tokens';
 import { insertRecord } from '../src/services/records';
-import { MAX_SERIES_WITH_ENDED_PER_OWNER } from '../src/services/series-limit';
+import { MAX_SERIES_WITH_ENDED_PER_OWNER, seriesRowEnded } from '../src/services/series-limit';
 import { as, createEvent, IDS, LOGINS, seedFamily, syncAs, timed } from './family';
 import {
   createTestContext,
@@ -725,10 +725,12 @@ describe('総点検のレビュー（4 回目 F1・F2・5 回目 G1）: 繰り�
     privately = false,
     rrule = 'FREQ=WEEKLY',
     from = '2026-01-01',
+    allDay = false,
   ) {
     const owner = IDS[who];
     for (let i = 0; i < n + deleted; i++) {
-      const at = fromJst(addDays(from, i % 300), '09:00');
+      const day = addDays(from, i % 300);
+      const at = fromJst(day, '09:00');
       const gone = i >= n;
       insertRecord(ctx.database.db, {
         id: uuidv7(NOW + 50_000 + seeded++),
@@ -736,11 +738,11 @@ describe('総点検のレビュー（4 回目 F1・F2・5 回目 G1）: 繰り�
         title: `繰り返し ${i}`,
         note: null,
         location: null,
-        allDay: false,
-        startAt: at,
+        allDay,
+        startAt: allDay ? null : at,
         endAt: null,
-        startDate: null,
-        endDate: null,
+        startDate: allDay ? day : null,
+        endDate: allDay ? day : null,
         rrule,
         exdates: [],
         parentId: null,
@@ -967,5 +969,89 @@ describe('総点検のレビュー（4 回目 F1・F2・5 回目 G1）: 繰り�
       body: {},
     });
     expect(restored.status).toBe(200);
+  });
+
+  it('7 回目 I3 終わっていないものが 100 件のとき、前の部分が終わる「これ以降」（今日・過ぎた回から）は通る。前の部分に回が残るなら 409', async () => {
+    ctx = createTestContext(devEnv(), { now: NOW });
+    seedFamily(ctx);
+    seedSeries(99, 0, 'mama');
+    // 日曜の毎週（2026-09-27 は今日で日曜）
+    const lesson = await createEvent(ctx, 'mama', {
+      title: '習い事',
+      allDay: true,
+      startDate: '2026-09-06',
+      rrule: 'FREQ=WEEKLY',
+      memberIds: [IDS.mama],
+    });
+    expect(lesson.res.status).toBe(201);
+    const split = (rid: string, key: string, who: 'papa' | 'mama', version: number) =>
+      send(ctx, 'PATCH', `/api/events/${lesson.event.id}`, {
+        headers: { ...as(who), 'if-match': String(version), 'idempotency-key': key },
+        body: {
+          scope: 'following',
+          recurrenceId: rid,
+          exceptionId: uuidv7(NOW + 90 + key.length),
+          changes: { title: '習い事（後半）' },
+        },
+      });
+    // 来週から分けると前の部分（今日の回まで）が残るので、終わっていないものが 101 件になる
+    const future = await split('2026-10-04', 'i3-1', 'mama', lesson.event.version);
+    expect(future.status).toBe(409);
+    // 今日から分けると前の部分は先週で終わるので、終わっていないものは 100 件のまま
+    const today = await split('2026-09-27', 'i3-2', 'papa', lesson.event.version);
+    expect(today.status).toBe(200);
+    const rows = ctx.database.db.select().from(events).all();
+    const activeNow = rows.filter(
+      (e) =>
+        e.ownerId === IDS.mama &&
+        e.rrule !== null &&
+        e.parentId === null &&
+        e.deletedAt === null &&
+        !seriesRowEnded(e, ctx.clock),
+    );
+    expect(activeNow).toHaveLength(100);
+  });
+
+  it('7 回目 I4 終わったものを含めて 400 件のとき、終わった繰り返しの件名を直すのは通る（直す行を 2 回数えない）', async () => {
+    ctx = createTestContext(devEnv(), { now: NOW });
+    seedFamily(ctx);
+    seedSeries(400, 0, 'yuki', false, 'FREQ=WEEKLY;UNTIL=20250101T235959', '2024-01-01');
+    const old = ctx.database.db
+      .select()
+      .from(events)
+      .all()
+      .find((e) => e.ownerId === IDS.yuki && e.rrule !== null);
+    if (!old) throw new Error('行がない');
+    const renamed = await send(ctx, 'PATCH', `/api/events/${old.id}`, {
+      headers: { ...as('yuki'), 'if-match': String(old.version), 'idempotency-key': 'i4-1' },
+      body: { scope: 'all', changes: { title: '昔の習い事' } },
+    });
+    expect(renamed.status).toBe(200);
+  });
+
+  it('7 回目 I5 COUNT を使い切った繰り返し（時刻あり・終日）は、開始から数えて終わっていれば 100 件に数えない', async () => {
+    ctx = createTestContext(devEnv(), { now: NOW });
+    seedFamily(ctx);
+    seedSeries(50, 0, 'mama', false, 'FREQ=MONTHLY;COUNT=3', '2024-01-01');
+    seedSeries(49, 0, 'mama', false, 'FREQ=MONTHLY;COUNT=3', '2024-01-01', true);
+    seedSeries(1, 0, 'mama');
+    const made = await createEvent(ctx, 'mama', {
+      title: '習い事',
+      allDay: true,
+      startDate: '2026-10-05',
+      rrule: 'FREQ=WEEKLY',
+      memberIds: [IDS.mama],
+    });
+    expect(made.res.status).toBe(201);
+    // COUNT がまだ残るもの（来年まで続く）は数える
+    seedSeries(98, 0, 'mama', false, 'FREQ=MONTHLY;COUNT=24', '2026-01-01');
+    const over = await createEvent(ctx, 'mama', {
+      title: '101 件目',
+      allDay: true,
+      startDate: '2026-10-06',
+      rrule: 'FREQ=WEEKLY',
+      memberIds: [IDS.mama],
+    });
+    expect(over.res.status).toBe(409);
   });
 });

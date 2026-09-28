@@ -25,15 +25,16 @@ export interface SeriesShape {
 }
 
 /**
- * その持ち主のシリーズとして next（作る・繰り返しにする・分けた後ろ・戻す・終わりを変える行）を置けるか（置けなければ
- * 409 series_limit）。selfId の行（変える前の自分）は数えずに next を 1 件として数え、終わっていないものの数は
- * next が終わっていないときだけ確かめる（終わったものを作る・戻すのは、終わっていないものを増やさない）
+ * その持ち主のシリーズとして next（作る・繰り返しにする・戻す・終わりを変える行。「これ以降」は前の部分と後ろの
+ * シリーズの 2 つ）を置けるか（置けなければ 409 series_limit）。selfId の行（変える前の自分）は数えずに next を
+ * 数え、終わっていないものの数は next のどれかが終わっていないときだけ確かめる（終わったものを作る・戻すのは、
+ * 終わっていないものを増やさない。「これ以降」で前の部分が終わるなら、終わっていないものは増えない。7 回目 I3）
  */
 export function assertSeriesRoom(
   db: DbLike,
   clock: Clock,
   ownerId: string,
-  next: SeriesShape,
+  next: readonly SeriesShape[],
   selfId: string | null = null,
 ): void {
   const rows = db
@@ -54,7 +55,7 @@ export function assertSeriesRoom(
       ),
     )
     .all();
-  if (rows.length + 1 > MAX_SERIES_WITH_ENDED_PER_OWNER) {
+  if (rows.length + next.length > MAX_SERIES_WITH_ENDED_PER_OWNER) {
     throw new ApiError(
       409,
       'series_limit',
@@ -62,10 +63,11 @@ export function assertSeriesRoom(
     );
   }
   const today = todayJst(clock.now());
-  if (ended(next, today)) return;
+  const adding = next.filter((r) => !ended(r, today)).length;
+  if (adding === 0) return;
   let active = 0;
   for (const r of rows) if (!ended(r, today)) active++;
-  if (active + 1 > MAX_SERIES_PER_OWNER) {
+  if (active + adding > MAX_SERIES_PER_OWNER) {
     throw new ApiError(
       409,
       'series_limit',

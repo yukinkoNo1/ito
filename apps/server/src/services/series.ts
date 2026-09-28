@@ -332,8 +332,17 @@ export function updateFollowing(
   const id = newId ?? uuidv7(now);
   checkUnusedId(db, id);
   // 「これ以降」は新しいシリーズ（持ち主は元のシリーズと同じ）を作る（持ち主ごとに 100 件まで。§24 D41）。
+  // 元のシリーズは前の部分の規則で数える（今日・過ぎた回から分けると前の部分は終わる。7 回目 I3）。
   // 繰り返しを外すなら増えない
-  if (f.rrule) assertSeriesRoom(db, clock, master.ownerId, f);
+  if (f.rrule) {
+    assertSeriesRoom(
+      db,
+      clock,
+      master.ownerId,
+      [{ ...master, rrule: split.headRrule }, f],
+      master.id,
+    );
+  }
   const exceptions = discardExceptions(db, master, (r) => isAtOrAfter(r, rid), now);
   const head = bumpMaster(db, me, master, now, {
     rrule: split.headRrule,

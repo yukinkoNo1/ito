@@ -6,6 +6,9 @@ import {
   formatMonthDay,
   fromJst,
   type Occurrence,
+  occurrenceTimes,
+  overlapsRange,
+  parseRrule,
   WEEKDAY_LABELS,
   weekdayOf,
 } from '@ito/core';
@@ -49,6 +52,56 @@ function dateLabel(date: string): string {
   return `${formatMonthDay(date)}(${WEEKDAY_LABELS[weekdayOf(date)]})`;
 }
 
+/**
+ * 回の並び（§13.1）の回から 1 回を選ぶ: これからの最初の回、なければ開始がいちばん遅い過ぎた回（開始が同じなら
+ * 並びで先のもの）
+ */
+function pick(
+  sorted: readonly Occurrence<LocalEvent>[],
+  upcoming: (o: Occurrence<LocalEvent>) => boolean,
+): Occurrence<LocalEvent> | null {
+  let best: Occurrence<LocalEvent> | null = null;
+  for (const o of sorted) {
+    if (upcoming(o)) return o;
+    if (!best || o.startMs > best.startMs) best = o;
+  }
+  return best;
+}
+
+/**
+ * 本体の規則を展開せずに、「この回だけ変更」の行の回だけを作る（core の expand と同じ決まり: 本体に日時と読める
+ * 規則があること、同じ recurrenceId は後の行、取り消した回は出さない、自分の日時で [from, to) にかかるもの）。
+ * 合う行（ok）の回だけを、回の並びで返す
+ */
+function exceptionOccurrences(
+  master: LocalEvent,
+  rows: readonly LocalEvent[],
+  ok: ReadonlySet<LocalEvent>,
+  fromMs: number,
+  toMs: number,
+): Occurrence<LocalEvent>[] {
+  if (!occurrenceTimes(master) || !master.rrule || !parseRrule(master.rrule).ok) return [];
+  const overridden = new Map<string, LocalEvent>();
+  for (const e of rows)
+    if (e.parentId !== null && e.recurrenceId) overridden.set(e.recurrenceId, e);
+  const exdates = new Set(master.exdates);
+  const out: Occurrence<LocalEvent>[] = [];
+  for (const [rid, e] of overridden) {
+    if (exdates.has(rid) || !ok.has(e)) continue;
+    const t = occurrenceTimes(e);
+    if (!t) continue;
+    const occ: Occurrence<LocalEvent> = {
+      key: `${master.id}@${rid}`,
+      seriesId: master.id,
+      recurrenceId: rid,
+      event: e,
+      ...t,
+    };
+    if (overlapsRange(occ, fromMs, toMs)) out.push(occ);
+  }
+  return out.sort(compareOccurrences);
+}
+
 export function searchOccurrences(
   events: readonly LocalEvent[],
   query: string,
@@ -58,11 +111,16 @@ export function searchOccurrences(
   const terms = searchTerms(query);
   if (terms.length === 0) return [];
   const visible = events.filter((e) => canSeeContent(e, ctx.meId));
-  // 先に文字で絞る: 本体か「この回だけ変更」のどれかが合うシリーズ（と、繰り返しでない予定）だけを展開する
-  // （1 年分を全部展開してから探すと、繰り返しが多いと 1 文字ごとに秒単位になる。総点検のレビュー 5 回目 G2）。
-  // 回ごとの中身の一致は、展開したあとでも確かめる
+  // 行ごとに 1 回だけ確かめる: 文字の一致と人の絞り込みは、どちらも行の中身で決まる（回ごとに長いメモを正規化しない）。
+  // 人の絞り込みは回ごとに当ててからシリーズの 1 回を選ぶ（「この回だけ」別の人にした回があっても、シリーズの
+  // ほかの回で出す）。絞り込みの見る担当（memberIds・forEveryone）は行にあり、全員の予定はいつも合う
+  const okRows = new Set<LocalEvent>();
+  for (const e of visible) if (matches(e, terms) && matchesFilter(e, filter)) okRows.add(e);
+  // 先に絞る: 本体か「この回だけ変更」のどれかが文字にも人にも合うシリーズ（と、繰り返しでない予定）だけを展開する
+  // （1 年分を全部展開してから探すと、繰り返しが多いと 1 文字ごとに秒単位になる。総点検のレビュー 5 回目 G2・
+  // 7 回目 I1）
   const hit = new Set<string>();
-  for (const e of visible) if (matches(e, terms)) hit.add(e.parentId ?? e.id);
+  for (const e of okRows) hit.add(e.parentId ?? e.id);
   const rowsBySeries = new Map<string, LocalEvent[]>();
   for (const e of visible) {
     const id = e.parentId ?? e.id;
@@ -75,17 +133,9 @@ export function searchOccurrences(
   // これからの回か（終わりは含まないので、昨日の終日・きのう 24:00 に終わった予定は過ぎた回）
   const upcoming = (o: Occurrence<LocalEvent>) =>
     o.endMs !== null ? o.endMs > todayMs : o.startMs >= todayMs;
-  // 行ごとに 1 回だけ確かめる（文字の一致と人の絞り込みはどちらも行の中身で決まる。長いメモを回ごとに正規化しない）。
-  // 人の絞り込みは回ごとに先に当てる（「この回だけ」別の人にした回があっても、シリーズのほかの回で出す）
-  const rowOk = new Map<LocalEvent, boolean>();
-  const ok = (o: Occurrence<LocalEvent>) => {
-    let v = rowOk.get(o.event);
-    if (v === undefined) {
-      v = matches(o.event, terms) && matchesFilter(toOccurrenceVM(o, ctx), filter);
-      rowOk.set(o.event, v);
-    }
-    return v;
-  };
+  const ok = (o: Occurrence<LocalEvent>) => okRows.has(o.event);
+  const rangeFrom = fromJst(addDays(ctx.today, -SEARCH_RANGE_DAYS));
+  const rangeTo = fromJst(addDays(ctx.today, SEARCH_RANGE_DAYS + 1));
   // シリーズごとに 1 回（これからの最初の回、なければ最後の回）。前後 1 年を全部展開せず、今日から近い順に
   // 広げていく窓で探す（合うシリーズが多いと 1 文字ごとに秒単位になる。総点検のレビュー 6 回目 H1）。
   // 窓の外に答えがないことは次のとおり: これからの回は [今日, 今日 + d) にかかるので、窓で最初に合った回より
@@ -96,24 +146,31 @@ export function searchOccurrences(
     { o: Occurrence<LocalEvent>; vm: ReturnType<typeof toOccurrenceVM> }
   >();
   for (const [seriesId, rows] of rowsBySeries) {
+    const master = rows.find((e) => e.parentId === null);
+    // 親のない例外行は展開しない（expandAll と同じ）
+    if (!master) continue;
     let found: Occurrence<LocalEvent> | null = null;
-    for (const d of FORWARD_WINDOWS) {
-      const to = fromJst(addDays(ctx.today, d));
-      found = expandAll(rows, todayMs, to).find((o) => upcoming(o) && ok(o)) ?? null;
-      if (found) break;
-    }
-    if (!found) {
-      for (const d of BACKWARD_WINDOWS) {
-        const from = fromJst(addDays(ctx.today, -d));
-        // 今日ちょうどに始まって終わる回も過ぎた回なので、終わりは今日の 0:00 の直後まで
-        let best: Occurrence<LocalEvent> | null = null;
-        for (const o of expandAll(rows, from, todayMs + 1)) {
-          // expandAll は開始の順なので、開始が同じなら最初のものを残す
-          if (!upcoming(o) && ok(o) && (!best || o.startMs > best.startMs)) best = o;
-        }
-        if (best && (best.startMs > from || d === SEARCH_RANGE_DAYS)) {
-          found = best;
-          break;
+    if (!okRows.has(master)) {
+      // 本体が合わなければ、合う回は「この回だけ変更」の行の回だけ。規則は展開しない（7 回目 I2）
+      found = pick(exceptionOccurrences(master, rows, okRows, rangeFrom, rangeTo), upcoming);
+    } else {
+      for (const d of FORWARD_WINDOWS) {
+        const to = fromJst(addDays(ctx.today, d));
+        found = expandAll(rows, todayMs, to).find((o) => upcoming(o) && ok(o)) ?? null;
+        if (found) break;
+      }
+      if (!found) {
+        for (const d of BACKWARD_WINDOWS) {
+          const from = fromJst(addDays(ctx.today, -d));
+          // 今日ちょうどに始まって終わる回も過ぎた回なので、終わりは今日の 0:00 の直後まで
+          const best = pick(
+            expandAll(rows, from, todayMs + 1).filter((o) => !upcoming(o) && ok(o)),
+            upcoming,
+          );
+          if (best && (best.startMs > from || d === SEARCH_RANGE_DAYS)) {
+            found = best;
+            break;
+          }
         }
       }
     }
