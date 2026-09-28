@@ -127,6 +127,8 @@
 | 総点検 | 依存の監査 | `pnpm audit --prod`（EXIT=0、0 件）、`pnpm audit`（EXIT=0。受け入れた drizzle-kit の esbuild の 1 件だけを外す） | OK |
 | 総点検 | コンテナ（非 root・読み取り専用・cap_drop・app.env） | `docker compose build`・`up -d --wait`・`exec app id`（uid=10001）・/app に書けない・CapEff 0・NoNewPrivs 1・待ち受けは 127.0.0.1:8787 だけ・イメージに .env なし・`feed-token list`・`feed-check-inner.mjs`（401/200/401）・`down` | OK（すべて EXIT=0） |
 | 総点検 | `pnpm check`・`pnpm build`・`pnpm test:e2e` | `pnpm check`（Vitest 643 件）、`pnpm build`（check-dist: 初回表示の JS 199KB）、`pnpm test:e2e`（56 件中 55 件。「§19 これからの一覧…long task」が 52ms で落ちた。原因を調べて直した（§24 D40）あとは 56 件とも通る） | OK |
+| 総点検 | 修正のレビュー（1 回目） | 総点検の修正（32fce57）を 3 観点で別のエージェントがレビューし、指摘ごとに反証 → 確かめられた 10 件（C1〜C10。高 1・中 3・低 6）を、失敗する再現テストを書いてから直した（bad774b。docs/security-review.md「修正のレビュー（1 回目）」、§24 D41） | OK（core recurrence-cost.test.ts・ids-text.test.ts、server audit.test.ts「C5〜C10」・notify.test.ts「C4」「C8」・perf.test.ts・architecture.test.ts、`node scripts/check-dev.mjs` EXIT=0） |
+| 総点検 | E2E の long task（52ms で落ちた 1 件）の原因を調べて直す | Chrome のトレースと CPU プロファイル（一時的な調べるための spec。調べたあとに消した）→ 端で足すたびに 140 日分を組み立て直して描き直すタスクと描画のタスクが 50ms すれすれ → 変わらない日を描き直さない・日ごとにレイアウトと描画を閉じ込める・位置の合わせ直しを次の描画の直前に（§24 D40）。しきい値と測り方は変えていない | OK（同じ測り方で最大 52.3ms → 34.7ms、描画のタスクはなくなった。web phase7.test.ts「これからの一覧の描き直しを小さくする」、`pnpm test:e2e` 56 件） |
 | Phase 6 | `pnpm check`・`pnpm test:e2e`・`pnpm build`・`docker compose build` | `pnpm check`（261 件）、`pnpm test:e2e`（39 件）、`pnpm build`、`docker compose build` | OK（すべて EXIT=0） |
 
 ## 決めたこと（SPEC §24 に書いたもの）
@@ -154,6 +156,8 @@
 - D36: Phase 4 のレビューで決めた通知の細則（自分で止めた印、まとめ待ちの件名の見え方と消し方・同じ人だけまとめる・読んだ行だけ片づける、renotify、終日⇔時刻ありの通知と行の書き換え、最初の回の「これ以降」、公開鍵の状態と文言、ready を待たない、翌日 0:00）
 - D38: 仕上げの細則（空き時間は今日から、検索の範囲と並び、書き出しは fetch だけ・JSON と ICS の形、バックアップと掃除の時刻、同期の gzip、これからの一覧は 140 日まで、ビルドの検査）
 - D39: 総点検で決めたこと（/api/* の GET も X-Ito-Client と same-origin、本文を読んでから本人を確かめる・家族の管理は確かめ直す、名前の見えない文字、「これ以降」で公開・非公開にしたときの履歴と消した例外、フィードの人の端末の判定と失敗の WARN、SW の遷移の除外、設置後の確認で連携キーをコマンドラインに書かない、回の出ない繰り返しを拒み開始を送って展開する、Web Push の送り先はプッシュサービスだけ・1 人 10 台・送信の締め切り、変更・削除・復元は 120 件/分・取り消した回は 1000 まで、1 文字と全体の長さ、依存の監査は開発用も含む）
+- D40: これからの一覧の描き直しを小さくする（文脈と家族の一覧を中身が変わったときだけ作り直す、変わらない日は描き直さない、日ごとにレイアウトと描画を閉じ込める、位置の合わせ直しは次の描画の直前）
+- D41: 総点検の修正のレビューで決めたこと（COUNT の規則の展開、回の出ない期間の検査の省き方と覚え方、範囲の外の日付、BYSETPOS の重複、「これ以降」で非公開にしたときのまとめ待ち、フィードの失敗の WARN のタイマー、途中で切れた本文、端末の引き継ぎ、名前を比べる鍵）
 - D37: 一言入力の細則（found と reason、先に選んだ日を残す、回数制限はルール解析、AI の出力の検証、公式 SDK・再試行なし、例の作り方、時間帯、重なりの警告、ai:eval）
 
 ## 後で足すテスト
@@ -183,6 +187,7 @@
 - （解決済み。§24 D40）E2E の「§19 これからの一覧…long task」が総点検の途中で 1 回 52ms で落ちた。Chrome のトレースで調べると、端で足すたびに 140 日分を組み立て直して描き直すタスク（39〜50ms）と、そのあとの描画のタスク（44〜52ms）が 50ms すれすれで、揺れではなく余裕がなかった（文脈と家族の一覧が描き直しのたびに新しいオブジェクトになり、関係のない描き直しでも一覧を組み立て直していたのも一因）。変わらない日を描き直さない・日ごとにレイアウトと描画を閉じ込める・位置の合わせ直しを次の描画の直前に移す、で直した。同じ測り方で最大 34.7ms、描画のタスクはなくなった。しきい値と測り方は変えていない
 - 初回表示の JS は gzip で 199KB（§19 の上限 200KB に近い。総点検で core に展開の検査を足したため）。これ以上足すときは、開いたときに読む画面にさらに分ける
 - テストの購読の送り先を、プッシュサービスの形（https://fcm.googleapis.com/fcm/send/…・https://web.push.apple.com/…）に変えた（総点検 B4 で送り先をプッシュサービスに限ったため。確かめる中身は同じ）
+- テストを直したもの（総点検の修正のレビュー）: server notify.test.ts「1 人の購読は 10 台まで…」の「ほかの家族の端末を引き継ぐときも数える（409）」を外し、「ほかの家族の端末を引き継ぐ…ときは台数に数えない…」を足した（前の期待は C8 の不具合そのものだった。§24 D41 (8)）
 - テストを直したもの（総点検）: server middleware.test.ts の「GET には CSRF の検査を掛けない（クロスサイトの Origin・Sec-Fetch-Site でも 200）」「ホーム画面・通知から開くとき（Sec-Fetch-Site: none、Origin なし）の GET も通る」を、§24 D39 の新しい決まり（/api/* の GET は X-Ito-Client と same-origin が要る・ページの遷移には掛けない）を確かめるテストに書き換えた（前の決まりそのものが A3・A4 の穴だった）。export.test.ts の「X-Ito-Client がない」要求は、テストの send() が GET にも X-Ito-Client を付けるようにしたので、明示して外した（確かめる中身は同じ）。E2E phase2.spec.ts で許すコンソールエラーを、/api/export だけから /api と /%61pi への遷移の 4xx に広げた（A5 で遷移の形を足したため。URL で絞っている）
 - テストを直したもの（Phase 7）: server static.test.ts の /api/export へのページ遷移を 404 から 403 に（経路がなかったときの状態コードを期待していた。確かめたいのは index.html にならないことで、それは変えていない）
 - E2E のコンソールエラー 0 件の確認では、ネットワークを切るテスト（オフライン・API 遮断・競合・ログアウトのあとのオフライン）と /api/export への遷移のテストに限り、Chromium が自分で出す「Failed to load resource」のうち、意図して失敗させた /api/ への要求のもの（net::ERR_INTERNET_DISCONNECTED / net::ERR_FAILED / status of 409 / /api/*・/%61pi/* へのページ遷移の 4xx）だけを許している（URL で絞る。アプリシェル・アイコンなどの失敗やアプリのエラーは許さない。e2e/fixtures.ts の allowedConsoleErrors）

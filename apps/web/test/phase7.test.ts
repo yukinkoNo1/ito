@@ -11,7 +11,10 @@ import {
   buildFlowScreen,
   countFlowFresh,
   extendFlowRange,
+  FLOW_FUTURE_LIMIT,
+  FLOW_PAST_LIMIT,
   FLOW_WINDOW_DAYS,
+  keepSame,
   MAX_FLOW_DAYS,
   reuseSame,
   sameData,
@@ -326,6 +329,23 @@ describe('これからの一覧の範囲（§19。§24 D38）', () => {
     expect(r.from).toBe('2026-09-27');
   });
 
+  it('上限の近くへ移動した範囲で端まで行っても、見ている側の端を内へ動かさない（見ている日を消さない。レビュー 2 回目 D10）', () => {
+    const future = addDays(today, FLOW_FUTURE_LIMIT);
+    const nearFuture = { from: addDays(future, -56), to: addDays(future, 56) };
+    for (const byScroll of [true, false]) {
+      const r = extendFlowRange(nearFuture, 'end', byScroll, today);
+      expect(r.to >= nearFuture.to).toBe(true);
+      expect(r.from <= future && future < r.to).toBe(true);
+    }
+    const past = addDays(today, FLOW_PAST_LIMIT + 5);
+    const nearPast = { from: addDays(past, -56), to: addDays(past, 56) };
+    for (const byScroll of [true, false]) {
+      const r = extendFlowRange(nearPast, 'start', byScroll, today);
+      expect(r.from <= nearPast.from).toBe(true);
+      expect(r.from <= past && past < r.to).toBe(true);
+    }
+  });
+
   it('足せるのは今日から過去 1 年・未来 3 年まで', () => {
     const limit = addDays(today, 366 * 3);
     const r = extendFlowRange({ from: '2026-09-27', to: addDays(limit, -2) }, 'end', false, today);
@@ -407,6 +427,14 @@ describe('これからの一覧の描き直しを小さくする（§19。§24 D
       if (before && sameData(before, item)) expect(item).toBe(before);
     }
     expect(merged.map((i) => i.key)).toEqual(longer.items.map((i) => i.key));
+  });
+
+  it('keepSame: 同期で同じ中身を書き直しても前の配列を使う（家族の一覧。レビュー 2 回目 D8）', () => {
+    const prev = [{ id: 'a', name: 'お父さん', aliases: ['パパ'] }];
+    expect(keepSame(prev, [{ id: 'a', name: 'お父さん', aliases: ['パパ'] }])).toBe(prev);
+    const changed = [{ id: 'a', name: 'お父さん', aliases: ['父'] }];
+    expect(keepSame(prev, changed)).toBe(changed);
+    expect(keepSame(null, changed)).toBe(changed);
   });
 
   it('中身が変わった行は新しいオブジェクト（古い行を出し続けない）', () => {

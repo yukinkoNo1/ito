@@ -359,7 +359,7 @@ function toRRule(rule: RuleParts, dtstart: Wall): RRuleInstance {
  * 9999 年まで空回りし、1970 年に始まる毎日の規則は表示範囲まで 2 万日を歩く。そこで
  * (1) 保存するとき、回の出ない期間が続きすぎる規則を拒む（ruleDensityError）
  * (2) 展開は、表示範囲の少し前の期間の初めから始める（開始を期間の単位で送る）。COUNT の毎日・毎週は、送った期間で
- *     飛ばした回の数を計算で出して COUNT から引く。COUNT の毎月・毎年は送らない（歩くのは COUNT の回まで）
+ *     飛ばした回の数を計算で出して COUNT から引く。COUNT の毎月・毎年は、期間の種類ごとの回の数を覚えて足し合わせる
  * 展開のたびに行うのは計算だけで、シリーズ全体を歩かない（総点検のレビュー C1・C2）
  */
 
@@ -408,14 +408,57 @@ function representativeYear(y: number): number {
  * その期間（毎月は月、毎年は年）に回が出るか。間隔を 1 万年にして、rrule が 1 期間だけを見るようにする
  * （回が出なくても次の期間は 9999 年より後なので、そこで止まる）
  */
-function periodHasOccurrence(rule: RuleParts, periodStart: Wall): boolean {
-  const r = new RRule({
+function onePeriod(rule: RuleParts, start: Wall): RRuleInstance {
+  return new RRule({
     freq: RRULE_FREQ[rule.freq],
     interval: rule.freq === 'MONTHLY' ? 120_000 : 10_000,
-    dtstart: toFloating(periodStart),
+    dtstart: toFloating(start),
     ...byOptions(rule),
   });
-  return r.after(toFloating(periodStart), true) !== null;
+}
+
+function periodHasOccurrence(rule: RuleParts, periodStart: Wall): boolean {
+  return onePeriod(rule, periodStart).after(toFloating(periodStart), true) !== null;
+}
+
+const countCache = new LruCache<number>(20_000);
+
+/**
+ * その期間（毎月は月、毎年は年）に rrule が出す回の数（BYSETPOS の重複も数える＝COUNT の数え方）。
+ * 期間の種類（月の長さ・1 日の曜日、毎年は前後の年のうるう年と 1/1 の曜日）ごとに覚える
+ */
+function occurrencesInPeriod(ex: RuleParts, y: number, m: number, time: TimeHM): number {
+  const kind =
+    ex.freq === 'MONTHLY'
+      ? `${m}|${daysInMonth(y, m)}|${firstWeekday(y, m)}`
+      : `${isLeapYear(y - 1)}|${isLeapYear(y)}|${isLeapYear(y + 1)}|${firstWeekday(y, 1)}`;
+  const key = `${formatRrule(ex)}|${time}|${kind}`;
+  const hit = countCache.get(key);
+  if (hit !== undefined) return hit;
+  const start = { date: `${representativeYear(y)}-${pad2(m)}-01`, time };
+  return countCache.set(key, onePeriod(ex, start).all().length);
+}
+
+/**
+ * COUNT の毎月・毎年で、開始から k 期間ぶん（間隔ごと）に使う回の数。最初の期間は開始より後だけを数える。
+ * 期間ごとの回の数は種類ごとに覚え、合計は（規則・開始・k）ごとに覚える（総点検のレビュー 2 回目 D2）
+ */
+function usedByPeriods(rule: RuleParts, ex: RuleParts, dtstart: Wall, k: number): number {
+  const plain = { ...ex, count: null, until: null };
+  const key = `${formatRrule(plain)}|${dtstart.date}T${dtstart.time}|${k}|${rule.count}`;
+  const hit = countCache.get(key);
+  if (hit !== undefined) return hit;
+  const { year, month } = parseDate(dtstart.date);
+  const monthly = rule.freq === 'MONTHLY';
+  const origin = monthly ? year * 12 + (month - 1) : year;
+  let used = onePeriod(plain, dtstart).all().length;
+  for (let j = 1; j < k && used < (rule.count ?? 0); j++) {
+    const at = origin + j * rule.interval;
+    used += monthly
+      ? occurrencesInPeriod(plain, Math.floor(at / 12), (at % 12) + 1, dtstart.time)
+      : occurrencesInPeriod(plain, at, 1, dtstart.time);
+  }
+  return countCache.set(key, used);
 }
 
 const densityCache = new LruCache<boolean>(4000);
@@ -429,8 +472,11 @@ function everyPeriodHasOccurrence(ex: RuleParts): boolean {
   // 日と曜日の両方を書くと、両方に合う日だけになる（13 日の金曜など）
   if (ex.byMonthDay.length > 0 && ex.byDay.length > 0) return false;
   const someDay = ex.byMonthDay.some((v) => Math.abs(v) <= 28);
+  // rrule は「曜日」と「第 n 曜日」を混ぜると、両方に合う日だけを出す（MO,1TU は回が出ない）。混ぜたものは周期をたどる
+  const plain = ex.byDay.some((d) => d.nth === null);
+  const nth = ex.byDay.filter((d) => d.nth !== null);
   const someWeekday = (limit: number) =>
-    ex.byDay.some((d) => d.nth === null || Math.abs(d.nth) <= limit);
+    plain ? nth.length === 0 : nth.some((d) => Math.abs(d.nth ?? 0) <= limit);
   if (ex.freq === 'MONTHLY') {
     // 毎月の月の絞り込みは、間隔との組み合わせで回の出ない月が決まるので周期をたどる
     if (ex.byMonth.length > 0) return false;
@@ -452,10 +498,10 @@ function firstWeekday(y: number, m: number): number {
  * 毎年は最大 400 期間）。期間の回の有無は、月の長さ・1 日の曜日（毎年は前後の年のうるう年と 1/1 の曜日）が同じなら
  * 同じなので、その組ごとに rrule で 1 期間だけ確かめる。結果は覚えておく
  */
-function denseEnough(rule: RuleParts, dtstart: Wall): boolean {
+function denseEnough(rule: RuleParts, dtstart: Wall, byShape = true): boolean {
   if (rule.freq === 'DAILY' || rule.freq === 'WEEKLY') return true;
   const ex = explicitRule({ ...rule, count: null, until: null }, dtstart.date);
-  if (everyPeriodHasOccurrence(ex)) return true;
+  if (byShape && everyPeriodHasOccurrence(ex)) return true;
   const { year, month } = parseDate(dtstart.date);
   const monthly = rule.freq === 'MONTHLY';
   const cycle = monthly ? 4800 : 400;
@@ -497,6 +543,15 @@ function denseEnough(rule: RuleParts, dtstart: Wall): boolean {
   return densityCache.set(key, ok);
 }
 
+/** テスト用: 規則の形からの判定と、周期をたどる判定を別々に返す（形からの判定が誤っていないかを確かめる） */
+export function densityPathsForTest(
+  rule: RuleParts,
+  dtstart: Wall,
+): { shape: boolean; walk: boolean } {
+  const ex = explicitRule({ ...rule, count: null, until: null }, dtstart.date);
+  return { shape: everyPeriodHasOccurrence(ex), walk: denseEnough(rule, dtstart, false) };
+}
+
 /** 保存する規則の検査（開始が決まってから）。回が 1 つも出ない・まれにしか出ない規則はエラーの文 */
 export function ruleDensityError(rule: RuleParts, dtstart: Wall): string | null {
   if (denseEnough(rule, dtstart)) return null;
@@ -520,14 +575,13 @@ function periodIndex(freq: RuleFreq, date: DateISO): number {
  * 置く（回は期間の中で開始より後だけが出るため）。
  * COUNT の毎日は曜日の一回り（7 期間）ごとに送る: 7 期間に曜日が 1 回ずつ来るので、飛ばす回は「送った一回りの数 ×
  * 曜日の数」。COUNT の毎週は「送った期間の数 × 曜日の数」（最初の週の途中から数えても同じ）。
- * COUNT の毎月・毎年は、期間ごとの回の数が決まらないので送らない（歩くのは COUNT の回か表示範囲まで）
+ * COUNT の毎月・毎年は、飛ばした期間の回の数（期間の種類ごとに rrule で 1 期間だけ数えて覚える）を引く
  */
 function rebased(
   rule: RuleParts,
   dtstart: Wall,
   from: Wall,
 ): { rule: RuleParts; dtstart: Wall } | 'ended' | null {
-  if (rule.count !== null && (rule.freq === 'MONTHLY' || rule.freq === 'YEARLY')) return null;
   const n = rule.interval;
   const step = rule.freq === 'DAILY' && rule.count !== null ? 7 : 1;
   const k =
@@ -538,8 +592,12 @@ function rebased(
   const ex = explicitRule(rule, dtstart.date);
   let count = rule.count;
   if (count !== null) {
-    const weekdays = new Set(ex.byDay.map((d) => d.weekday)).size;
-    count -= k * (rule.freq === 'DAILY' && weekdays === 0 ? 7 : weekdays);
+    if (rule.freq === 'MONTHLY' || rule.freq === 'YEARLY') {
+      count -= usedByPeriods(rule, ex, dtstart, k);
+    } else {
+      const weekdays = new Set(ex.byDay.map((d) => d.weekday)).size;
+      count -= k * (rule.freq === 'DAILY' && weekdays === 0 ? 7 : weekdays);
+    }
     if (count <= 0) return 'ended';
   }
   const { year, month } = parseDate(dtstart.date);
@@ -572,8 +630,12 @@ export function ruleStarts(
   if (moved === 'ended') return [];
   const base = moved ?? { rule, dtstart };
   const out: Wall[] = [];
+  let last = Number.NaN;
   toRRule(base.rule, base.dtstart).between(fromD, toD, true, (d) => {
     if (d.getTime() >= toD.getTime()) return false;
+    // BYSETPOS の位置が同じ日を指すと rrule は同じ日時を続けて 2 回出す。同じ回は 1 回にする
+    if (d.getTime() === last) return true;
+    last = d.getTime();
     out.push(fromFloating(d));
     return out.length < limit;
   });

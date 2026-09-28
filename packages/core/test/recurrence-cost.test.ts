@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { eventCreateSchema, fieldsFromCreate } from '../src/index';
 import { addDays } from '../src/jst';
 import {
+  densityPathsForTest,
   isOccurrenceOf,
   MAX_EMPTY_PERIODS,
   parseRrule,
@@ -52,9 +53,10 @@ function plain(text: string, dtstart: Wall): InstanceType<RRuleModule['RRule']> 
 
 function reference(text: string, dtstart: Wall, from: Wall, to: Wall): string[] {
   const toD = floating(to);
+  // rrule は BYSETPOS の位置が同じ日を指すと同じ日時を 2 回出す。展開は 1 回にするので、正解の側もまとめる
   return plain(text, dtstart)
     .between(floating(from), toD, true)
-    .filter((d) => d < toD)
+    .filter((d, i, all) => d < toD && (i === 0 || d.getTime() !== all[i - 1]?.getTime()))
     .map(label);
 }
 
@@ -344,5 +346,182 @@ describe('開始を送った展開と素の rrule を、決まった乱数で作
       compared++;
     }
     expect(compared).toBeGreaterThan(300);
+  });
+});
+
+describe('BYSETPOS の位置が同じ日を指しても、同じ回を 2 回出さない（総点検のレビューで見つけた rrule の重複）', () => {
+  it('毎月 15 日の 1 番目と最後（同じ日）・4 週の月の第 4 と最後の月曜は 1 回', () => {
+    expect(
+      ruleStarts(
+        rule('FREQ=MONTHLY;BYMONTHDAY=15;BYSETPOS=1,-1'),
+        wall('2026-01-15'),
+        wall('2026-01-01'),
+        wall('2026-04-01'),
+      ).map((w) => w.date),
+    ).toEqual(['2026-01-15', '2026-02-15', '2026-03-15']);
+    const mondays = ruleStarts(
+      rule('FREQ=MONTHLY;BYDAY=MO;BYSETPOS=4,-1'),
+      wall('2026-01-05'),
+      wall('2026-01-01'),
+      wall('2027-01-01'),
+    ).map((w) => w.date);
+    expect(new Set(mondays).size).toBe(mondays.length);
+  });
+});
+
+describe('総点検のレビュー（2 回目）: 回が出ると形から決める判定の誤り', () => {
+  it('BYDAY に曜日と第 n 曜日を混ぜた規則は、rrule では両方に合う日だけ。回が出なければ保存できない', () => {
+    const start = wall('2026-01-01');
+    for (const text of [
+      'FREQ=MONTHLY;BYDAY=MO,1TU',
+      'FREQ=YEARLY;BYDAY=MO,1TU',
+      'FREQ=YEARLY;BYMONTH=3;BYDAY=SU,2SA',
+    ]) {
+      expect([text, ruleDensityError(rule(text), start)]).not.toEqual([text, null]);
+    }
+    // 両方に合う日がある規則（最後の月曜）は保存でき、素の rrule と同じ回
+    const ok = 'FREQ=MONTHLY;BYDAY=MO,-1MO';
+    expect(ruleDensityError(rule(ok), start)).toBeNull();
+    expect(mine(ok, start, wall('2026-01-01'), wall('2027-01-01'))).toEqual(
+      reference(ok, start, wall('2026-01-01'), wall('2027-01-01')),
+    );
+  });
+});
+
+describe('形からの判定は、周期をたどる判定と食い違わない（総点検のレビュー 2 回目）', () => {
+  it('決まった乱数で作った毎月・毎年の規則で、形から「どの期間にも回が出る」とした規則は、たどっても回の出ない期間が続かない', () => {
+    let seed = 777;
+    const rand = (n: number) => {
+      seed = (seed * 1103515245 + 12345) % 2147483648;
+      return seed % n;
+    };
+    const days = ['MO', 'TU', 'WE', 'TH', 'FR', 'SA', 'SU'];
+    let claimed = 0;
+    for (let i = 0; i < 1500; i++) {
+      const freq = rand(2) === 0 ? 'MONTHLY' : 'YEARLY';
+      const parts = [`FREQ=${freq}`];
+      const byDay: string[] = [];
+      for (let j = rand(3); j > 0; j--) {
+        const n = rand(3) === 0 ? '' : String([1, 2, 3, 4, 5, -1, -2, -5][rand(8)]);
+        byDay.push(`${n}${days[rand(7)]}`);
+      }
+      if (byDay.length > 0) parts.push(`BYDAY=${[...new Set(byDay)].join(',')}`);
+      if (rand(3) === 0) parts.push(`BYMONTHDAY=${[1, 13, 28, 29, 30, 31, -1, -28, -29][rand(9)]}`);
+      if (rand(3) === 0) parts.push(`BYMONTH=${1 + rand(12)}`);
+      if (freq === 'YEARLY' && rand(6) === 0) parts.push(`BYWEEKNO=${1 + rand(53)}`);
+      if (rand(3) === 0) parts.push(`INTERVAL=${1 + rand(24)}`);
+      const parsed = parseRrule(parts.join(';'));
+      if (!parsed.ok) continue;
+      const start = wall(addDays('1990-01-01', rand(365 * 60)));
+      const { shape, walk } = densityPathsForTest(parsed.rule, start);
+      if (shape) {
+        claimed++;
+        expect([parts.join(';'), start.date, walk]).toEqual([parts.join(';'), start.date, true]);
+      }
+    }
+    expect(claimed).toBeGreaterThan(100);
+  });
+});
+
+describe('総点検のレビュー（2 回目）D2: COUNT の毎月・毎年の規則も、表示のたびに開始から歩かない', () => {
+  it('1970 年に始まる COUNT の毎月・毎年の規則が 600 本あっても、2 回目の展開は 100ms 未満', async () => {
+    vi.resetModules();
+    const r = await import('../src/recurrence');
+    for (const text of [
+      'FREQ=MONTHLY;COUNT=1000',
+      'FREQ=MONTHLY;BYDAY=MO,TU,WE,TH,FR;BYSETPOS=-1;COUNT=1000',
+      'FREQ=MONTHLY;BYMONTHDAY=31;COUNT=1000',
+      'FREQ=YEARLY;COUNT=1000',
+    ]) {
+      const parsed = r.parseRrule(text);
+      if (!parsed.ok) throw new Error(parsed.message);
+      const starts = Array.from({ length: 600 }, (_, i) =>
+        wall(addDays('1970-01-01', i * 3), '09:00'),
+      );
+      const window = [wall('2026-09-28'), wall('2026-10-01')] as const;
+      for (const s of starts) r.ruleStarts(parsed.rule, s, ...window);
+      const t0 = performance.now();
+      for (const s of starts) r.ruleStarts(parsed.rule, s, ...window);
+      // 直す前は 600 本で 1 回およそ 0.9〜1.2 秒（毎月）
+      expect([text, performance.now() - t0 < 100]).toEqual([text, true]);
+    }
+  });
+});
+
+describe('COUNT の毎月・毎年で開始を送っても、出る回は素の rrule と同じ（総点検のレビュー 2 回目 D2）', () => {
+  it('決まった乱数で作った COUNT の毎月・毎年の規則（BYSETPOS の重複・第 n 曜日・月の絞り込み・週番号を含む）', () => {
+    let seed = 4242;
+    const rand = (n: number) => {
+      seed = (seed * 1103515245 + 12345) % 2147483648;
+      return seed % n;
+    };
+    const shapes = [
+      '',
+      'BYMONTHDAY=31',
+      'BYMONTHDAY=-1',
+      'BYMONTHDAY=15;BYSETPOS=1,-1',
+      'BYDAY=MO;BYSETPOS=4,-1',
+      'BYDAY=2WE,4WE',
+      'BYDAY=-1FR',
+      'BYDAY=MO,TU,WE,TH,FR;BYSETPOS=-1',
+      'BYDAY=FR;BYMONTHDAY=13',
+      'BYMONTH=2;BYMONTHDAY=29',
+      'BYMONTH=3,9;BYDAY=1SU',
+    ];
+    let compared = 0;
+    for (let i = 0; i < 500; i++) {
+      const freq = rand(3) === 0 ? 'YEARLY' : 'MONTHLY';
+      const parts = [`FREQ=${freq}`];
+      const shape = shapes[rand(shapes.length)] as string;
+      if (shape) parts.push(shape);
+      if (freq === 'YEARLY' && rand(5) === 0) parts.push('BYWEEKNO=20;BYDAY=MO');
+      const interval = 1 + rand(freq === 'MONTHLY' ? 13 : 4);
+      if (interval > 1) parts.push(`INTERVAL=${interval}`);
+      parts.push(`COUNT=${1 + rand(1000)}`);
+      const text = parts.join(';');
+      const parsed = parseRrule(text);
+      if (!parsed.ok) continue;
+      const start = wall(
+        addDays('1970-01-01', rand(365 * 60)),
+        `${String(rand(24)).padStart(2, '0')}:${rand(2) === 0 ? '00' : '30'}`,
+      );
+      if (ruleDensityError(parsed.rule, start) !== null) continue;
+      const fromDate = addDays('2020-01-01', rand(365 * 10));
+      const from = wall(fromDate);
+      const to = wall(addDays(fromDate, 1 + rand(400)));
+      expect([text, start, from, mine(text, start, from, to)]).toEqual([
+        text,
+        start,
+        from,
+        reference(text, start, from, to),
+      ]);
+      compared++;
+    }
+    expect(compared).toBeGreaterThan(300);
+  });
+});
+
+describe('総点検のレビュー（2 回目）D3: 範囲の外の開始に終わりの時刻があっても 500 にしない', () => {
+  it('開始が日本時間で 3000 年・1899 年になる時刻と終わりの時刻は、日付の範囲のエラー', () => {
+    const owner = '0192f5d0-0000-7000-8000-000000000001';
+    for (const [startAt, endAt, rrule] of [
+      ['2999-12-31T20:00:00-10:00', '2999-12-31T21:00:00-10:00', null],
+      ['2999-12-31T20:00:00-10:00', '2999-12-31T21:00:00-10:00', 'FREQ=MONTHLY'],
+      ['1900-01-01T00:00:00+14:00', '1900-01-01T01:00:00+14:00', 'FREQ=DAILY'],
+    ] as const) {
+      const input = eventCreateSchema.parse({
+        title: 'x',
+        allDay: false,
+        startAt,
+        endAt,
+        rrule,
+        memberIds: [owner],
+      });
+      const res = fieldsFromCreate(input, owner);
+      expect([startAt, 'errors' in res && res.errors.map((e) => e.field)]).toEqual([
+        startAt,
+        ['startAt'],
+      ]);
+    }
   });
 });

@@ -9,15 +9,7 @@ import {
   weekdayOf,
 } from '@ito/core/jst';
 import { CalendarDays, ChevronLeft, ChevronRight, Search, X } from 'lucide-react';
-import {
-  type CSSProperties,
-  memo,
-  useCallback,
-  useEffect,
-  useLayoutEffect,
-  useRef,
-  useState,
-} from 'react';
+import { memo, useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { BottomSlot } from '../primitives/AppShell';
 import { Button } from '../primitives/Controls';
 import ScheduleEventRow from '../primitives/ScheduleEventRow';
@@ -243,17 +235,13 @@ const FlowItemView = memo(function FlowItemView({
     ...day.timed.map((t) => ({ occ: t.occ, past: t.past })),
   ];
   const nowAt = day.nowIndex === null ? null : day.allDay.length + day.nowIndex;
-  // 画面の外の日は描かない（content-visibility。§19。§24 D40）。描く前の高さの見込みは行の数から
-  const style: CSSProperties & { '--flow-rows': string } = {
-    '--flow-rows': String(Math.max(1, rows.length)),
-  };
+  // 日の区切りはレイアウトと描画を閉じ込める（ui/additions.css の .date-section。§19。§24 D40）
   return (
     <div
       className="date-section"
       data-date={day.date}
       data-item-key={item.key}
       id={`date-${day.date}`}
-      style={style}
     >
       <DayHeader day={day} members={members} onAdd={() => onComposeOnDate(day.date)} />
       {rows.map((row, index) => (
@@ -331,6 +319,14 @@ export default function UpcomingScreen(props: FlowScreenProps) {
   // （Safari にはスクロールアンカーがない）
   const userScrolled = useRef(false);
   const pendingAnchor = useRef<{ key: string; top: number } | null>(null);
+  // 利用者が日を選んで移ったら、読み足しの位置の合わせ直しはやめる（合わせ直しは次の描画の直前なので、
+  // その前に移ると移った先を戻してしまう。総点検のレビュー 2 回目 D7）
+  const jumping =
+    <A extends unknown[]>(fn: (...args: A) => void) =>
+    (...args: A) => {
+      pendingAnchor.current = null;
+      fn(...args);
+    };
   const reachStart = useRef(props.onReachStart);
   const reachEnd = useRef(props.onReachEnd);
   reachStart.current = props.onReachStart;
@@ -457,15 +453,17 @@ export default function UpcomingScreen(props: FlowScreenProps) {
 
       <div className="today-summary">
         <span>{summary.join(' · ')}</span>
-        {freshCount > 0 && <Button onClick={props.onJumpToFresh}>新しい予定 {freshCount}件</Button>}
+        {freshCount > 0 && (
+          <Button onClick={jumping(props.onJumpToFresh)}>新しい予定 {freshCount}件</Button>
+        )}
       </div>
 
       <WeekStrip
         datePickerOpen={datePickerOpen}
         members={members}
-        onJumpToDate={props.onJumpToDate}
-        onNextWeek={props.onNextWeek}
-        onPrevWeek={props.onPrevWeek}
+        onJumpToDate={jumping(props.onJumpToDate)}
+        onNextWeek={jumping(props.onNextWeek)}
+        onPrevWeek={jumping(props.onPrevWeek)}
         onToggleDatePicker={() => setDatePickerOpen((open) => !open)}
         selectedDate={selectedDate}
         week={week}
@@ -531,7 +529,7 @@ export default function UpcomingScreen(props: FlowScreenProps) {
 
       {(showBackToToday || awayFromToday) && (
         <BottomSlot>
-          <Button className="return-today" onClick={props.onJumpToday}>
+          <Button className="return-today" onClick={jumping(props.onJumpToday)}>
             今日に戻る
           </Button>
         </BottomSlot>
@@ -543,7 +541,7 @@ export default function UpcomingScreen(props: FlowScreenProps) {
           onClose={() => setDatePickerOpen(false)}
           onSelectDate={(date) => {
             setDatePickerOpen(false);
-            props.onJumpToDate(date);
+            jumping(props.onJumpToDate)(date);
           }}
           today={today}
           weekStart={weekStart}

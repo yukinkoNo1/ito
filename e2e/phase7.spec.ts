@@ -314,6 +314,61 @@ test('§19 これからの一覧: 1 年分の予定でスクロールしても 5
   await expect(list).not.toContainText('E2E 毎日の内緒');
 });
 
+test('§19 端で読み足している最中に週の帯で日を選んでも、選んだ日へ移る（読み足しの位置の合わせ直しで戻さない。総点検のレビュー 2 回目 D7）', async ({
+  page,
+  request,
+}) => {
+  const start = dayFromToday(-3);
+  for (let i = 0; i < 3; i++) {
+    await createAs(request, 'papa', {
+      title: `E2E 読み足し${i}`,
+      allDay: false,
+      startAt: `${start}T${String(8 + i * 3).padStart(2, '0')}:00:00+09:00`,
+      rrule: 'FREQ=DAILY',
+    });
+  }
+  await page.goto('/');
+  const list = page.getByRole('region', { name: 'これからの予定' });
+  await expect(list.getByRole('button', { name: /E2E 読み足し0/ }).first()).toBeVisible();
+  await page.evaluate(() => {
+    const root = document.querySelector<HTMLElement>('[aria-label="これからの予定"]');
+    if (root) root.style.overflowAnchor = 'none';
+  });
+  const box = await list.boundingBox();
+  if (!box) throw new Error('一覧が見えない');
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+  await page.mouse.wheel(0, 50);
+  await page.waitForTimeout(300);
+  const tomorrow = dayFromToday(1);
+  const [, month, day] = tomorrow.split('-').map(Number);
+  // 下の端へ動かして読み足させ、一覧が変わった直後（次の描画より前）に、週の帯で明日を押す
+  await page.evaluate((label) => {
+    const root = document.querySelector<HTMLElement>('[aria-label="これからの予定"]');
+    if (!root) throw new Error('一覧がない');
+    const lastDay = () => [...root.querySelectorAll('[id^="date-"]')].at(-1)?.id;
+    const before = lastDay();
+    const observer = new MutationObserver(() => {
+      if (lastDay() === before) return;
+      observer.disconnect();
+      const button = [...document.querySelectorAll<HTMLElement>('.week-days button')].find((b) =>
+        b.getAttribute('aria-label')?.startsWith(label),
+      );
+      button?.click();
+    });
+    observer.observe(root, { childList: true, subtree: true });
+    root.scrollTop = root.scrollHeight - root.clientHeight - 100;
+  }, `${month}月${day}日 `);
+  await page.waitForTimeout(1000);
+  const offset = await page.evaluate((date) => {
+    const root = document.querySelector<HTMLElement>('[aria-label="これからの予定"]');
+    const el = document.getElementById(`date-${date}`);
+    if (!root || !el) return null;
+    return el.getBoundingClientRect().top - root.getBoundingClientRect().top;
+  }, tomorrow);
+  expect(offset).not.toBeNull();
+  expect(Math.abs(offset ?? 9999)).toBeLessThanOrEqual(2);
+});
+
 test('メモのリンクは http(s) だけ。rel="noopener noreferrer" で別の画面に開く（§18 T4）', async ({
   page,
   request,

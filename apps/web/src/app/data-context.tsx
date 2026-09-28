@@ -6,11 +6,13 @@ import {
   useContext,
   useEffect,
   useMemo,
+  useRef,
   useState,
   useSyncExternalStore,
 } from 'react';
 import { ItoDb, type LocalEvent } from '../data/db';
 import { DataStore, type SyncState } from '../data/store';
+import { keepSame } from '../viewmodels/same-data';
 
 interface DataContextValue {
   db: ItoDb;
@@ -77,14 +79,16 @@ export function useMe(): MeDTO | undefined {
 export function useMembers(): MemberDTO[] {
   const { db } = useData();
   const members = useLiveQuery(() => db.members.toArray(), [db]);
-  // 並べた配列は、家族の一覧が変わったときだけ作り直す（描き直しのたびに別の配列にしない。§24 D40）
-  return useMemo(
-    () =>
-      [...(members ?? [])].sort((a, b) =>
-        a.createdAt < b.createdAt ? -1 : a.createdAt > b.createdAt ? 1 : a.id < b.id ? -1 : 1,
-      ),
-    [members],
-  );
+  // 並べた配列は、家族の一覧の中身が変わったときだけ作り直す（描き直しや、同期で同じ中身を書き直したときに
+  // 別の配列にしない。§24 D40。総点検のレビュー 2 回目 D8）
+  const previous = useRef<MemberDTO[] | null>(null);
+  return useMemo(() => {
+    const sorted = [...(members ?? [])].sort((a, b) =>
+      a.createdAt < b.createdAt ? -1 : a.createdAt > b.createdAt ? 1 : a.id < b.id ? -1 : 1,
+    );
+    previous.current = keepSame(previous.current, sorted);
+    return previous.current;
+  }, [members]);
 }
 
 export function useEvents(): LocalEvent[] | undefined {

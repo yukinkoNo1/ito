@@ -675,3 +675,41 @@ describe('C6 /api の GET は X-Ito-Client が要る（設置後の確認・開�
     expect(res.status).toBe(200);
   });
 });
+
+describe('総点検のレビュー（2 回目）D6: 時計が戻っても、失敗の WARN のタイマーは 1 分より長く・短く回り続けない', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
+
+  it('時計が 30 日戻ったあとの失敗も 1 分以内に WARN に出し、タイマーの待ちは 1〜60 秒に収める', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    const delays: number[] = [];
+    const original = globalThis.setTimeout;
+    vi.spyOn(globalThis, 'setTimeout').mockImplementation(((fn: () => void, ms?: number) => {
+      delays.push(ms ?? 0);
+      return original(fn, ms);
+    }) as typeof setTimeout);
+    ctx = createTestContext(tailscaleEnv(), { now: NOW });
+    seedFamily(ctx);
+    const fail = () =>
+      send(ctx, 'GET', '/api/feed/display', {
+        csrf: false,
+        headers: { authorization: `Bearer ito_feed_${'C'.repeat(43)}` },
+      });
+    expect((await fail()).status).toBe(401);
+    ctx.clock.set(NOW - 30 * 24 * 60 * 60 * 1000);
+    expect((await fail()).status).toBe(401);
+    expect((await fail()).status).toBe(401);
+    for (let i = 0; i < 70; i++) {
+      ctx.clock.advance(1000);
+      vi.advanceTimersByTime(1000);
+    }
+    const total = ctx.logs.lines
+      .flatMap((l) => l.split(String.fromCharCode(10)))
+      .filter((l) => l.includes('feed auth failed'))
+      .reduce((n, l) => n + ((JSON.parse(l) as { failures: number }).failures ?? 0), 0);
+    expect(total).toBe(3);
+    expect(delays.every((ms) => ms >= 1000 && ms <= 60_000)).toBe(true);
+  });
+});

@@ -25,18 +25,25 @@ export function registerFeedRoutes(app: App, deps: AppDeps): void {
 
   // まとめた失敗の件数を出す（1 分に 1 回まで。失敗が続いたあと静かになっても、次の要求か 1 分後に出す。総点検 A10）
   let flushTimer: ReturnType<typeof setTimeout> | null = null;
+  // 前に出してからの時間（時計が戻ったら、もう出してよいとみなす。総点検のレビュー 2 回目 D6）
+  const sinceLastLog = () => {
+    const elapsed = clock.now() - lastAuthFailLog;
+    return elapsed < 0 ? AUTH_FAIL_LOG_INTERVAL_MS : elapsed;
+  };
   const flushAuthFailures = () => {
-    const now = clock.now();
-    if (authFailures === 0 || now - lastAuthFailLog < AUTH_FAIL_LOG_INTERVAL_MS) return;
+    if (authFailures === 0 || sinceLastLog() < AUTH_FAIL_LOG_INTERVAL_MS) return;
     logger.warn({ failures: authFailures }, 'feed auth failed');
     authFailures = 0;
-    lastAuthFailLog = now;
+    lastAuthFailLog = clock.now();
   };
   // 出していない件数が残っていれば、次に出せる時刻にタイマーを掛ける（出したあとも残っていれば掛け直す。
-  // 要求のときに出して時刻が進んでも、置いていかれない。総点検のレビュー C5）
+  // 要求のときに出して時刻が進んでも、置いていかれない。総点検のレビュー C5）。待ちは 1〜60 秒
   const scheduleFlush = () => {
     if (authFailures === 0 || flushTimer !== null) return;
-    const wait = Math.max(1000, lastAuthFailLog + AUTH_FAIL_LOG_INTERVAL_MS - clock.now());
+    const wait = Math.min(
+      AUTH_FAIL_LOG_INTERVAL_MS,
+      Math.max(1000, AUTH_FAIL_LOG_INTERVAL_MS - sinceLastLog()),
+    );
     flushTimer = setTimeout(() => {
       flushTimer = null;
       flushAuthFailures();

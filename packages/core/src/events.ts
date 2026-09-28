@@ -231,9 +231,10 @@ function finalize(
     if (startAt === null) errors.push({ field: 'startAt', message: '開始の日時を入れてください' });
     else {
       const startDay = toJstParts(startAt).date;
-      if (startDay < MIN_DATE || startDay > MAX_DATE)
-        errors.push({ field: 'startAt', message: '日付の範囲が正しくありません' });
-      if (endAt !== null) {
+      const inRange = startDay >= MIN_DATE && startDay <= MAX_DATE;
+      if (!inRange) errors.push({ field: 'startAt', message: '日付の範囲が正しくありません' });
+      // 範囲の外の日付では暦の計算をしない（1900〜2999 年の外は計算できない。総点検のレビュー 2 回目 D3）
+      if (endAt !== null && inRange) {
         if (endAt <= startAt)
           errors.push({ field: 'endAt', message: '終わりは始まりより後にしてください' });
         // 時刻ありの予定は開始日の翌日 24:00 までに終わる（§10）

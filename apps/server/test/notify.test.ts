@@ -930,23 +930,44 @@ describe('購読の数と送り先（総点検 B4）', () => {
     expect((await post('haru', 'https://fcm.googleapis.com/fcm/send/haru-2')).status).toBe(200);
   });
 
-  it('ほかの家族の端末を引き継ぐ（同じ endpoint を登録し直す）ときは台数に数えない。前の持ち主の通知はその端末に届かない（レビュー C8）', async () => {
-    // ゆきは 10 台（beforeEach の 1 台＋9 台）
+  it('ほかの家族の端末を引き継ぐ（同じ endpoint を登録し直す）とき: 上限の中なら引き継ぎ、上限なら前の持ち主から外して 409。どちらでも前の持ち主の通知はその端末に届かない（レビュー C8・2 回目 D5）', async () => {
+    // はるの端末（タブレット）を、まだ 1 台のゆきが引き継ぐ
+    expect((await post('yuki', endpointOf('haru'))).status).toBe(200);
+    expect(subscriptionOf('haru')?.memberId).toBe(IDS.yuki);
+    // ゆきは 10 台に
+    for (let i = 3; i <= 10; i++) {
+      expect((await post('yuki', `https://fcm.googleapis.com/fcm/send/yuki-${i}`)).status).toBe(
+        200,
+      );
+    }
+    // お母さんの端末を、10 台のゆきが引き継ごうとする → 前の持ち主（お母さん）から外して 409
+    const res = await post('yuki', endpointOf('mama'));
+    expect(res.status).toBe(409);
+    expect(((await res.json()) as { code: string }).code).toBe('device_limit');
+    expect(subscriptionOf('mama')).toBeUndefined();
+    sender.clear();
+    const test = await send(ctx, 'POST', '/api/push/test', { headers: as('mama'), body: {} });
+    expect(test.status).toBe(200);
+    expect(sender.sent.map((x) => x.endpoint)).not.toContain(endpointOf('mama'));
+  });
+
+  it('2 人がかりでも、1 人の端末を上限を超えて増やせない（レビュー 2 回目 D5）', async () => {
     for (let i = 2; i <= 10; i++) {
       expect((await post('yuki', `https://fcm.googleapis.com/fcm/send/yuki-${i}`)).status).toBe(
         200,
       );
     }
-    // はるの端末（タブレット）をゆきが使い始める
-    const res = await post('yuki', endpointOf('haru'));
-    expect(res.status).toBe(200);
-    expect(subscriptionOf('haru')?.memberId).toBe(IDS.yuki);
-    sender.clear();
-    const test = await send(ctx, 'POST', '/api/push/test', { headers: as('haru'), body: {} });
-    expect(test.status).toBe(200);
-    expect(sender.sent.map((x) => x.endpoint)).not.toContain(endpointOf('haru'));
-    // 新しい端末は 11 台目なので 409 のまま
-    expect((await post('yuki', 'https://fcm.googleapis.com/fcm/send/yuki-new')).status).toBe(409);
+    for (let i = 0; i < 5; i++) {
+      const endpoint = `https://fcm.googleapis.com/fcm/send/haru-extra-${i}`;
+      expect((await post('haru', endpoint)).status).toBe(200);
+      expect((await post('yuki', endpoint)).status).toBe(409);
+    }
+    const rows = ctx.database.db
+      .select()
+      .from(pushSubscriptions)
+      .where(eq(pushSubscriptions.memberId, IDS.yuki))
+      .all();
+    expect(rows).toHaveLength(10);
   });
 
   it('送り先はプッシュサービスだけ（家の LAN・任意のサーバーは 422。行を作らない）', async () => {

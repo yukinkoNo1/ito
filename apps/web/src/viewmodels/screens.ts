@@ -21,6 +21,8 @@ import { longDateLabel } from './labels';
 import { buildMonth, toMonthCell } from './month';
 import { toMemberVMs, type VmContext } from './occurrence';
 
+export { keepSame, reuseSame, sameData } from './same-data';
+
 export const EMPTY_EXAMPLES = ['明日18時 みんなで夕食', '土曜10時 父 ゴルフ', '毎週日曜 母 ヨガ'];
 export const COMPOSER_HINT = '例: 土曜10時 父 ゴルフ';
 
@@ -70,12 +72,16 @@ export function extendFlowRange(
   const min = addDays(today, FLOW_PAST_LIMIT);
   const max = addDays(today, FLOW_FUTURE_LIMIT);
   const clamp = (d: DateISO) => (d < min ? min : d > max ? max : d);
+  // 足す側の端は内へ動かさない（上限の近くへ移動した範囲は上限の外まであることがある。見ている日を消さない。
+  // 総点検のレビュー 2 回目 D10）
   if (side === 'end') {
-    const to = clamp(addDays(range.to, FLOW_EXTEND_DAYS));
+    const extended = clamp(addDays(range.to, FLOW_EXTEND_DAYS));
+    const to = extended > range.to ? extended : range.to;
     const trimmed = addDays(to, -MAX_FLOW_DAYS);
     return { from: byScroll && trimmed > range.from ? trimmed : range.from, to };
   }
-  const from = clamp(addDays(range.from, -FLOW_EXTEND_DAYS));
+  const extended = clamp(addDays(range.from, -FLOW_EXTEND_DAYS));
+  const from = extended < range.from ? extended : range.from;
   const trimmed = addDays(from, MAX_FLOW_DAYS);
   return { from, to: byScroll && trimmed < range.to ? trimmed : range.to };
 }
@@ -105,35 +111,6 @@ export function countFlowFresh(
     for (const t of item.day.timed) if (t.occ.fresh) freshCount++;
   }
   return freshCount;
-}
-
-/** 素のデータ（VM）の中身が同じか（関数を含まない配列・オブジェクト・プリミティブ） */
-export function sameData(a: unknown, b: unknown): boolean {
-  if (a === b) return true;
-  if (typeof a !== 'object' || typeof b !== 'object' || a === null || b === null) return false;
-  if (Array.isArray(a) !== Array.isArray(b)) return false;
-  if (Array.isArray(a) && Array.isArray(b)) {
-    return a.length === b.length && a.every((v, i) => sameData(v, b[i]));
-  }
-  const ka = Object.keys(a);
-  const kb = Object.keys(b);
-  if (ka.length !== kb.length) return false;
-  const ra = a as Record<string, unknown>;
-  const rb = b as Record<string, unknown>;
-  return ka.every((k) => Object.hasOwn(rb, k) && sameData(ra[k], rb[k]));
-}
-
-/**
- * 作り直した一覧のうち、中身が前と同じ行は前のオブジェクトを使う（範囲を足したとき、変わらない日を
- * 描き直さない。UpcomingScreen は行を memo で描く。§19。§24 D40）
- */
-export function reuseSame<T extends { key: string }>(prev: readonly T[] | null, next: T[]): T[] {
-  if (!prev || prev.length === 0) return next;
-  const byKey = new Map(prev.map((item) => [item.key, item]));
-  return next.map((item) => {
-    const old = byKey.get(item.key);
-    return old !== undefined && sameData(old, item) ? old : item;
-  });
 }
 
 export function buildFlowScreen(input: {
