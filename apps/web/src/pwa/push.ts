@@ -138,6 +138,15 @@ async function register(env: PushEnv, sub: PushSubscriptionLike): Promise<boolea
 
 export type EnableResult = 'enabled' | 'denied' | 'unsupported' | 'unavailable' | 'failed';
 
+/** 「通知をオンにする」の結果の文（設定とホームの案内で同じ。家のサーバーに鍵がないと通信の失敗を分ける） */
+export const ENABLE_MESSAGES: Record<EnableResult, string> = {
+  enabled: 'この端末で通知を受け取ります',
+  denied: '通知が許可されませんでした。端末の設定で許可できます',
+  unsupported: 'この端末やブラウザでは通知を使えません',
+  unavailable: '家のサーバーで通知の設定がされていません',
+  failed: '通知をオンにできませんでした。しばらくしてからやり直してください',
+};
+
 /**
  * 「通知をオンにする」（ボタンを押したときに呼ぶ）。publicKey は画面を開いたときに取っておいたもの。
  * 最初に await するのは requestPermission()。鍵が取れていなければ許可のあとで取り直し、

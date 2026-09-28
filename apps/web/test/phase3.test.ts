@@ -600,4 +600,22 @@ describe('繰り返しの回の送信待ち（Phase 3 のレビュー。§24 D34
     expect(d.undo).toBeTypeOf('function');
     expect((await db.outbox.toArray()).map((o) => o.path)).toEqual([`/api/events/${s.id}`]);
   });
+
+  it('最初の回の「これ以降すべて」の変更は「すべて」として送り、保存先はそのシリーズ（新しいシリーズを作らない。Phase 4 のレビュー）', async () => {
+    const s = series();
+    await db.events.put(s);
+    const { store } = storeWith(() => 'network');
+    const u = await store.updateOccurrence(s.id, '2026-10-05T07:30', 'following', {
+      title: '可燃ごみ',
+    });
+    expect(u.ok).toBe(true);
+    const [item] = await db.outbox.toArray();
+    expect(item?.body).toEqual({
+      scope: 'all',
+      recurrenceId: '2026-10-05T07:30',
+      changes: { title: '可燃ごみ' },
+    });
+    // 自分への通知などの保存先は、今のシリーズ
+    expect(u.ok && u.target).toEqual({ eventId: s.id, recurrenceId: '2026-10-05T07:30' });
+  });
 });

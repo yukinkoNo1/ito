@@ -385,6 +385,15 @@ describe('端末の一覧・自分への通知の VM', () => {
     const back = followReminders(allDayDraft, timedDraft, editing, M.papa);
     expect(back).toEqual({ myReminders: [-15], touched: false });
     expect(shouldWriteReminders({ ...timedDraft, ...back }, editing)).toBe(false);
+    // 「この予定だけ」で回だけ終日にした: 行はシリーズ（時刻あり）のものなので、終日の通知は書かない
+    expect(shouldWriteReminders({ ...allDayDraft, ...toAllDay }, editing, false)).toBe(false);
+    expect(
+      shouldWriteReminders(
+        { ...allDayDraft, myReminders: [420] },
+        { ...editing, touched: true },
+        false,
+      ),
+    ).toBe(false);
     // 書く（行なし）で触らなければ行を作らない
     expect(shouldWriteReminders(timedDraft, { ...editing, pref: undefined, touched: false })).toBe(
       false,

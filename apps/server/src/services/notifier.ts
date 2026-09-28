@@ -345,7 +345,8 @@ export function changePayload(notices: PendingNoticeRow[], badge?: number): Push
 
 /**
  * 2 分まとめ・静かな時間（§15）。最後の変更から 2 分たち、静かな時間でなければ 1 通にまとめて送る。
- * 送る前に、今の予定で件名の見え方を決め直す（積んだあとに非公開にされても、前の件名を送らない。§10・§18 T5）
+ * 送る前に、今の予定で見えるかを確かめ直す（積んだあとに非公開にされても、前の件名を送らない。§10・§18 T5）。
+ * 見えるなら、積んだときの文（「この回だけ」の件名など）のまま送る
  */
 export async function flushFamilyNotices(deps: NotifierDeps): Promise<number> {
   const { db, clock } = deps;
@@ -395,8 +396,9 @@ export async function flushFamilyNotices(deps: NotifierDeps): Promise<number> {
     const notices = list.flatMap((n) => {
       const event = events.get(n.eventId);
       if (!event) return [];
-      const title = noticeTitle(event, member.id);
-      return [{ ...n, summary: noticeSummary(names.get(n.actorId) ?? '家族', title, n.action) }];
+      if (canSeeContent(event, member.id)) return [n];
+      const hidden = noticeTitle(event, member.id);
+      return [{ ...n, summary: noticeSummary(names.get(n.actorId) ?? '家族', hidden, n.action) }];
     });
     if (notices.length === 0) {
       flush(list);

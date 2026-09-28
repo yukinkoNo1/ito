@@ -843,7 +843,7 @@ export class DataStore {
   async updateOccurrence(
     eventId: string,
     recurrenceId: string,
-    scope: Scope,
+    requestedScope: Scope,
     input: OccurrenceInput,
   ): Promise<
     Result<LocalEvent> & {
@@ -863,6 +863,11 @@ export class DataStore {
     await db.transaction('rw', [db.events, db.outbox, db.conflicts], async () => {
       const master = await db.events.get(eventId);
       if (!master) return;
+      // 最初の回の「これ以降」は「すべて」と同じ（サーバーも同じ扱い。新しいシリーズは作られない。§11）
+      const scope: Scope =
+        requestedScope === 'following' && splitSeries(dtoToRecord(master), recurrenceId) === null
+          ? 'all'
+          : requestedScope;
       if (!canSeeContent(master, meId)) {
         result = {
           ok: false,

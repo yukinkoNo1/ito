@@ -122,7 +122,8 @@ export function ComposerContainer() {
         askScope: false,
         remindersTouched: false,
         reminderPref,
-        reminderPrefAllDay: made.allDay,
+        // 本人の行はシリーズ・予定そのものの行なので、種類も回ではなくシリーズ・予定のもの
+        reminderPrefAllDay: source ? source.allDay : made.allDay,
         reminderDefaults,
       });
     })();
@@ -190,10 +191,9 @@ export function ComposerContainer() {
     const r = await store.updateOccurrence(editId, seriesRid, scope, draftToInput(state.draft));
     if (!r.ok) return fail(r.errors.map((e) => e.message).join('。'));
     const t = r.target;
-    // 自分への通知は、保存したあとのシリーズに（「これ以降」なら新しいシリーズ）
-    if (shouldWriteReminders(state.draft, reminderStateOf(state))) {
-      void store.setMyReminders(t?.eventId ?? editId, state.draft.myReminders);
-    }
+    // 自分への通知は、保存したあとのシリーズに（「これ以降」なら新しいシリーズ）。
+    // 「この予定だけ」はシリーズの種類（終日か）が変わらないので、回だけ種類を変えた下書きの通知は書かない
+    const reminders = writeReminders(t?.eventId ?? editId, scope === 'this' ? master.allDay : null);
     // 下に詳細が開いていて、保存で回が変わったら（日時を動かした・「これ以降」）、詳細をその回に移す
     if (nav.detail && t && (t.eventId !== editId || t.recurrenceId !== seriesRid)) {
       nav.replaceEvent(`${t.eventId}@${t.recurrenceId}`);
@@ -204,8 +204,23 @@ export function ComposerContainer() {
       kind: 'undo',
       message: '保存しました',
       actionLabel: r.undo ? '元に戻す' : null,
-      onAction: () => void r.undo?.(),
+      onAction: () => {
+        void r.undo?.();
+        void reminders.undo?.();
+      },
     });
+  };
+
+  /**
+   * 保存したあと、自分への通知の行を書く（触ったとき・行が違う種類になったとき）。targetAllDay は行を付ける予定の
+   * 種類（null なら下書きと同じ）。元に戻すときは、前の本人の行に戻す
+   */
+  const writeReminders = (eventId: string, targetAllDay: boolean | null) => {
+    const rs = reminderStateOf(state);
+    if (!shouldWriteReminders(state.draft, rs, targetAllDay ?? state.draft.allDay)) return {};
+    void store.setMyReminders(eventId, state.draft.myReminders);
+    const before = rs.pref;
+    return { undo: before ? () => store.setMyReminders(eventId, before) : undefined };
   };
 
   const save = async () => {
@@ -220,14 +235,16 @@ export function ComposerContainer() {
       // 全部の項目を送る（手元で今の予定との差だけにする。サーバーは今の予定に当てて検証する）
       const r = await store.updateEvent(editId, input);
       if (!r.ok) return fail(r.errors.map((e) => e.message).join('。'));
-      if (shouldWriteReminders(state.draft, reminderStateOf(state)))
-        void store.setMyReminders(editId, state.draft.myReminders);
+      const reminders = writeReminders(editId, null);
       nav.closeComposer();
       toast.show({
         kind: 'undo',
         message: '保存しました',
         actionLabel: r.undo ? '元に戻す' : null,
-        onAction: () => void r.undo?.(),
+        onAction: () => {
+          void r.undo?.();
+          void reminders.undo?.();
+        },
       });
       return;
     }

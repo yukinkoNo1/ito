@@ -1,5 +1,5 @@
 # 進み具合
-今: Phase 4（通知） / 次にやること: docs/plans/phase-4.md §6 のレビューの指摘を直す → 確認 → phase-4 → 退避した Phase 5 の作業（git stash「phase5-wip」: ルール解析 38 件のテスト・/api/parse・ai_usage（0004）・書く画面の一言の解析・ai:eval・Phase 5 の E2E。テストは通っている）を戻す → レビュー → phase-5 → Phase 7 → 総点検 → 最終確認
+今: Phase 5（一言入力） / 次にやること: 退避した Phase 5 の作業（git stash「phase5-wip」）を戻し、Anthropic の呼び出しを SPEC §8 の @anthropic-ai/sdk に置き換え、書く画面の通知の決まり（D36）と合わせる → 確認 → レビュー → phase-5 → Phase 7 → 総点検 → 最終確認
 
 ## ステップ
 | ステップ | 状態（未着手・作業中・完了） | タグ | メモ |
@@ -9,7 +9,7 @@
 | Phase 2 PWA とローカルファースト | 完了 | phase-2 | レビューの指摘（ログアウトで SW の登録が残る、SW を通る遷移のテスト、競合中の編集で自分の変更が消える、送らずに戻した変更のあとの取得、429 の待ち、426 の更新、時計の巻き戻し ほか）を直した |
 | Phase 6 UI 統合 | 完了 | phase-6 | Phase 2 の次に行った（§24 D15）。レビューの指摘（シートのスワイプ、テーマの監視の漏れ、自分の非公開の候補、書く画面の日時の範囲、トースト・案内、履歴・ゴミ箱の状態、人の札が 7 個以上、日付をまたぐ行、検査の範囲 ほか）を直した |
 | Phase 3 繰り返し | 完了 | phase-3 | レビューの指摘（件名だけ直してもシリーズが動く、C-04 の件数とサーバーの食い違い、リセットした例外の復活、毎月の規則のずれ、回が出ない規則、pnpm dev が rrule の読み込みで起動しない、回の送信待ちの 409 ほか）を直した（§24 D34） |
-| Phase 4 通知 | 作業中 | phase-4 | |
+| Phase 4 通知 | 完了 | phase-4 | レビューの指摘（止めた端末の再購読、まとめ待ちの件名の漏れ、pnpm dev のログアウト、renotify、終日⇔時刻ありの通知 ほか）を直し、修正もレビューして直した（§24 D36） |
 | Phase 5 一言入力 | 未着手 | phase-5 | |
 | Phase 7 仕上げ | 未着手 | phase-7 | |
 | 総点検 | 未着手 | audit | |
@@ -97,7 +97,8 @@
 | Phase 4 | ホームの案内（F-23 のうち通知）と iPhone の未インストールの分岐 | web phase4.test.ts「ホームの案内（F-23 のうち通知）と通知の許可の状態」 | OK |
 | Phase 4 | reminder_prefs と既定値（詳細・書く画面の自分への通知） | E2E phase4.spec.ts「詳細の「自分への通知」で選ぶと保存され…」、web phase4.test.ts「自分への通知の保存」「端末の一覧・自分への通知の VM」 | OK |
 | Phase 4 | 実機確認の手順を README に | README「通知（Web Push。SPEC §15）」の「実機での確認の手順」 | OK（実機での確認は「要確認」） |
-| Phase 4 | `pnpm check`・`pnpm test:e2e`・`docker compose build`・`up -d --wait` | `pnpm check`（Vitest 444 件）、`pnpm test:e2e`（45 件）、`docker compose build`・`up -d --wait`（healthz 200、ログに push disabled が出ない＝鍵で push が有効）・`down` | OK（すべて EXIT=0） |
+| Phase 4 | レビューの指摘（§24 D36） | web phase4.test.ts「ログアウト・この端末の削除のあとは…」「購読を確かめているあいだに止めたら…」「画面を開いたときに鍵が取れていなければ…」「書く画面: 終日⇔時刻ありを切り替えたら…」「送れていない自分への通知があるうちは…」、logout.test.ts、phase3.test.ts「最初の回の「これ以降すべて」の変更は…」、server notify.test.ts「2 分以内に非公開にしたら…」「担当から外したら…」「送る前に…」「別の人の変更は…」「送っているあいだに…」「「この回だけ」の変更は…」「シリーズ全体を変えても…」「送信の結果の扱い」（5 件）、core「offsetLabel」（翌日 0:00）、E2E phase4.spec.ts「書く画面の自分への通知」2 件 | OK |
+| Phase 4 | `pnpm check`・`pnpm test:e2e`・`docker compose build`・`up -d --wait` | 修正後（Node 24.21.0）: `pnpm check`（Vitest 462 件）、`pnpm test:e2e`（47 件）、`docker compose build`・`up -d --wait`・`exec app node dist/cli.js feed-token list`・`down`。修正前: `pnpm check`（Vitest 444 件）、`pnpm test:e2e`（45 件）、`docker compose build`・`up -d --wait`（healthz 200、ログに push disabled が出ない＝鍵で push が有効）・`down` | OK（すべて EXIT=0） |
 | Phase 6 | `pnpm check`・`pnpm test:e2e`・`pnpm build`・`docker compose build` | `pnpm check`（261 件）、`pnpm test:e2e`（39 件）、`pnpm build`、`docker compose build` | OK（すべて EXIT=0） |
 
 ## 決めたこと（SPEC §24 に書いたもの）
@@ -122,6 +123,7 @@
 - D33: 繰り返しの細則（例外行の key、If-Match は親、exceptionId、RRULE の制限と正規化、消える件数、この回だけ削除の取り消し、reminder_prefs の複製、C-04 のオフライン）
 - D34: Phase 3 のレビューで決めた繰り返しの細則（差分だけを送る、消える件数の共通の計算、破棄した例外行は消す、毎月の規則の移動、RRULE の並びと比べ方、この回だけ変更の元に戻す、回の送信待ちの 409・404、「この予定だけ」の制限、保存したあとの回へ移る、rrule の ESM）
 - D35: 通知の細則（この端末の印、送信の記録と再送、まとめ・予告、家族の変更のまとめ待ち、通知の文と url、テスト通知、鍵がないとき、自分への通知の候補と保存、SW の知らせ、E2E の push）
+- D36: Phase 4 のレビューで決めた通知の細則（自分で止めた印、まとめ待ちの件名の見え方と消し方・同じ人だけまとめる・読んだ行だけ片づける、renotify、終日⇔時刻ありの通知と行の書き換え、最初の回の「これ以降」、公開鍵の状態と文言、ready を待たない、翌日 0:00）
 
 ## 後で足すテスト
 - 非公開の漏えい（まだない経路）: 書き出し（JSON・ICS。Phase 7）、一言入力の重なりの警告（Phase 5。端末内で作るので他人の非公開は「予定あり」になることを確かめる）、検索（Phase 7。端末内の DB を検索する）
@@ -132,9 +134,7 @@
 - **通知の実機での確認**（iPhone でホーム画面に追加 → 通知オン → テスト通知 → 5 分後の予定の通知 → 1 日アプリを開かなくても翌朝のまとめ）。実機と本物の Push サービス（Apple）が要るので、持ち主の作業。
   - 根拠: 手元の確認は偽の送信（server notify.test.ts）と、ブラウザの SW に DevTools で push を届ける E2E（phase4-push.spec.ts）まで。E2E のサーバーには VAPID の鍵を置いていない（本物の Push サービスに送らないため）。Docker では開発用の鍵で push が有効になることを確かめた（ログに push disabled が出ない）
   - 持ち主がやること: 本番の `app.env` に VAPID の鍵と `VAPID_SUBJECT`（mailto: か https:）を書き、README「通知（Web Push）」の「実機での確認の手順」を行う
-- **Node.js 24 LTS が開発機に入っていない**（管理者権限のインストールは持ち主の作業）。手元の開発・テストは Node 22 で行い、本番のイメージ（node:24-slim）では 24 で動くことを docker compose で確かめている（§24 D19）。
-  - 根拠: `node -v` → `v22.21.0`（C:\Program Files\nodejs）。`pnpm` はコマンドとしては無い（`pnpm: command not found`）
-  - 持ち主がやること: Node 24 LTS を入れる（入れたあと `pnpm install` をやり直す）。pnpm は corepack で使える（`corepack enable pnpm`、または README のとおりリポジトリ内に shim）
+- （解決済み）Node.js 24 LTS: 持ち主が入れた（2026-09-28 に `node -v` → `v24.21.0`）。`pnpm install` をやり直し（EXIT=0、lockfile は変わらず）、better-sqlite3 が Node 24 で読み込めることを確かめた。Phase 4 の締め（phase-4）からの確認はすべて Node 24
 - pnpm は PC 全体には入れず、corepack の shim をリポジトリ内の `.tools/bin`（.gitignore 済み）に置いて使っている（`corepack enable --install-directory .tools/bin pnpm`）。版は package.json の packageManager（pnpm@10.34.5）
 
 ## 既知の問題

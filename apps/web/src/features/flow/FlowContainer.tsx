@@ -14,7 +14,13 @@ import {
   NOTIFICATIONS_NOTICE,
   type NoticeKind,
 } from '../../pwa/home-notice';
-import { enablePush, loadPublicKey, type PublicKeyState, UNKNOWN_KEY } from '../../pwa/push';
+import {
+  ENABLE_MESSAGES,
+  enablePush,
+  loadPublicKey,
+  type PublicKeyState,
+  UNKNOWN_KEY,
+} from '../../pwa/push';
 import UpcomingScreen from '../../ui/screens/UpcomingScreen';
 import { buildFlowScreen, FLOW_WINDOW_DAYS, shiftWeek } from '../../viewmodels/screens';
 
@@ -140,16 +146,11 @@ export function FlowContainer() {
         }
         // 最初に待つのは requestPermission（enablePush の中）
         void enablePush(publicKey).then((result) => {
-          if (result === 'enabled') {
+          // 許可しなかったときは案内が消えるだけ（設定で理由を出す）
+          if (result !== 'denied') {
             toast.show({
-              kind: 'info',
-              message: 'この端末で通知を受け取ります',
-              actionLabel: null,
-            });
-          } else if (result !== 'denied') {
-            toast.show({
-              kind: 'error',
-              message: '通知をオンにできませんでした',
+              kind: result === 'enabled' ? 'info' : 'error',
+              message: ENABLE_MESSAGES[result],
               actionLabel: null,
             });
           }

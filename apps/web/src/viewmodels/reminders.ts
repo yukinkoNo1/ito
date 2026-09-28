@@ -91,10 +91,17 @@ export function followReminders(
 
 /**
  * 保存のときに本人の行を書くか: 触ったとき、または本人の行が違う種類（終日⇔時刻ありを切り替えた）のとき
- * （古い行を残すと、切り替えたあとの予定に前の種類の通知が効いてしまう）
+ * （古い行を残すと、切り替えたあとの予定に前の種類の通知が効いてしまう）。
+ * targetAllDay は行を付ける予定の種類。「この予定だけ」で回だけ種類を変えたときはシリーズの種類のままなので、
+ * 下書きの通知（回の種類のもの）は書かない
  */
-export function shouldWriteReminders(draft: EventDraftVM, state: ReminderDraftState): boolean {
-  return state.touched || (state.pref !== undefined && draft.allDay !== state.prefAllDay);
+export function shouldWriteReminders(
+  draft: EventDraftVM,
+  state: ReminderDraftState,
+  targetAllDay: boolean = draft.allDay,
+): boolean {
+  if (draft.allDay !== targetAllDay) return false;
+  return state.touched || (state.pref !== undefined && targetAllDay !== state.prefAllDay);
 }
 
 export function sameOffsets(a: readonly number[], b: readonly number[]): boolean {

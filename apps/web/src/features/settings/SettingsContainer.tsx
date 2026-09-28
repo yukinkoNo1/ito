@@ -15,6 +15,7 @@ import { apiRequest } from '../../data/api';
 import { detectPlatform, isStandalone } from '../../pwa/install';
 import { logoutThisDevice } from '../../pwa/logout';
 import {
+  ENABLE_MESSAGES,
   enablePush,
   loadPublicKey,
   notificationPermission,
@@ -30,14 +31,6 @@ import { buildSettingsVM } from '../../viewmodels/screens';
 
 export const membersResponse = z.object({ members: z.array(adminMemberDtoSchema) });
 const devicesResponse = z.object({ devices: z.array(deviceDtoSchema) });
-
-const ENABLE_MESSAGES = {
-  enabled: 'この端末で通知を受け取ります',
-  denied: '通知が許可されませんでした。端末の設定で許可できます',
-  unsupported: 'この端末やブラウザでは通知を使えません',
-  unavailable: '家のサーバーで通知の設定がされていません',
-  failed: '通知をオンにできませんでした。しばらくしてからやり直してください',
-} as const;
 
 const TEST_MESSAGES: Record<string, string> = {
   sent: 'テスト通知を送りました',

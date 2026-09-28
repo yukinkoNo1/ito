@@ -3,6 +3,7 @@ import { and, eq, isNull } from 'drizzle-orm';
 import type { DbLike } from '../db/client';
 import { type MemberRow, members, type PendingNoticeRow, pendingNotices } from '../db/schema';
 import { listActiveMembers } from './members';
+import { loadActiveExceptions } from './records';
 
 export type NoticeAction = 'create' | 'update' | 'delete' | 'restore';
 
@@ -61,8 +62,10 @@ function unflushedRows(db: DbLike, recipientId: string, eventId: string): Pendin
  * - 書いた人には送らない。設定が off の人、mine で担当でない人（全員の予定は担当に含む）には積まない
  * - 他人の非公開は「予定あり」と書く（§10）
  * - まとめ待ちに同じ人の同じ予定の変更があれば 1 つにする（追加してすぐ直したら「追加しました」のまま、文は新しいものに）
- * - 受け取らなくなった人（予定・シリーズそのものの変更で担当から外れた・mine の人）の、その予定のまとめ待ちは消す。
- *   受け取る人のほかの人の変更の行も、今の見え方で件名を直す（2 分以内に非公開にしたとき、前の件名を送らないため）
+ * - 受け取らなくなった人（予定・シリーズそのものの変更で担当から外れた mine の人。「この回だけ」の担当にもいない人）の、
+ *   その予定のまとめ待ちは消す
+ * - 見えなくなった人（2 分以内に非公開にされた）の、ほかの人の変更の行も件名を伏せる（前の件名を送らないため）。
+ *   見える人の行は、その変更のときの件名（「この回だけ」の件名など）のまま
  */
 export function enqueueFamilyNotices(
   db: DbLike,
@@ -82,24 +85,33 @@ export function enqueueFamilyNotices(
       .all()
       .map((m) => [m.id, m.name]),
   );
+  // 「この回だけ」の担当（例外行）。シリーズの変更で、その回の担当の人のまとめ待ちを消さないために見る
+  let exceptions: EventRecord[] | null = null;
+  const assignedToAnOccurrence = (memberId: string) => {
+    exceptions ??= loadActiveExceptions(db, eventId);
+    return exceptions.some((e) => e.forEveryone || e.memberIds.includes(memberId));
+  };
   for (const m of active) {
     if (m.id === actorId) continue;
     const rows = unflushedRows(db, m.id, eventId);
+    if (!canSeeContent(event, m.id)) {
+      for (const r of rows) {
+        if (r.actorId === actorId) continue;
+        db.update(pendingNotices)
+          .set({ summary: noticeSummary(names.get(r.actorId) ?? '家族', HIDDEN_TITLE, r.action) })
+          .where(eq(pendingNotices.id, r.id))
+          .run();
+      }
+    }
     if (!wantsFamilyNotice(m, event)) {
-      // 例外行（1 回だけの変更）の担当はシリーズの担当と違うことがあるので、消すのは予定・シリーズそのものの変更のときだけ
-      if (event.parentId === null) {
+      // 例外行（1 回だけの変更）の担当はシリーズの担当と違うことがあるので、消すのは予定・シリーズそのものの変更で、
+      // どの回の担当にもいないときだけ
+      if (event.parentId === null && !assignedToAnOccurrence(m.id)) {
         for (const r of rows) db.delete(pendingNotices).where(eq(pendingNotices.id, r.id)).run();
       }
       continue;
     }
     const title = noticeTitle(event, m.id);
-    for (const r of rows) {
-      if (r.actorId === actorId) continue;
-      db.update(pendingNotices)
-        .set({ summary: noticeSummary(names.get(r.actorId) ?? '家族', title, r.action) })
-        .where(eq(pendingNotices.id, r.id))
-        .run();
-    }
     const existing = rows.find((r) => r.actorId === actorId);
     const nextAction: NoticeAction =
       existing?.action === 'create' && action === 'update' ? 'create' : action;

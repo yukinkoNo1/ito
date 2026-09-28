@@ -551,8 +551,61 @@ describe('家族の変更（2 分まとめ・静かな時間）', () => {
     expect(res.status).toBe(200);
     at('2026-09-28', '10:04');
     await scheduler.tick();
+    // それぞれの変更のときの件名のまま（見える人には積んだときの文を送る）
     expect(sender.to('haru').map((s) => s.payload.body)).toEqual([
-      'お母さんが「眼科」を追加しました\nお父さんが「眼科」を変更しました',
+      'お母さんが「歯医者」を追加しました\nお父さんが「眼科」を変更しました',
+    ]);
+  });
+
+  it('「この回だけ」の変更は、その回の件名で知らせる', async () => {
+    await setNotifications('haru', { familyChanges: 'all' });
+    at('2026-09-28', '10:00');
+    const e = await make(
+      'mama',
+      timed('2026-09-29', '07:30', null, { title: '練習', rrule: 'FREQ=DAILY;COUNT=3' }),
+    );
+    at('2026-09-28', '10:01');
+    const res = await send(ctx, 'PATCH', `/api/events/${e.id}`, {
+      headers: { ...as('papa'), 'if-match': String(e.version) },
+      body: { scope: 'this', recurrenceId: '2026-09-30T07:30', changes: { title: '練習（振替）' } },
+    });
+    expect(res.status).toBe(200);
+    at('2026-09-28', '10:04');
+    await scheduler.tick();
+    expect(sender.to('haru').map((s) => s.payload.body)).toEqual([
+      'お母さんが「練習」を追加しました\nお父さんが「練習（振替）」を変更しました',
+    ]);
+  });
+
+  it('シリーズ全体を変えても、「この回だけ」の担当に入った mine の人のまとめ待ちは消さない', async () => {
+    await setNotifications('yuki', { familyChanges: 'mine' });
+    at('2026-09-28', '09:00');
+    const e = await make(
+      'mama',
+      timed('2026-09-29', '07:30', null, {
+        title: '練習',
+        rrule: 'FREQ=DAILY;COUNT=3',
+        memberIds: [IDS.haru],
+      }),
+    );
+    at('2026-09-28', '10:00');
+    let res = await send(ctx, 'PATCH', `/api/events/${e.id}`, {
+      headers: { ...as('mama'), 'if-match': String(e.version) },
+      body: {
+        scope: 'this',
+        recurrenceId: '2026-09-30T07:30',
+        changes: { memberIds: [IDS.haru, IDS.yuki] },
+      },
+    });
+    expect(res.status).toBe(200);
+    const version = ctx.database.db.select().from(events).where(eq(events.id, e.id)).get()?.version;
+    at('2026-09-28', '10:01');
+    res = await patchEvent(ctx, 'papa', e.id, version ?? null, { location: '校庭' });
+    expect(res.status).toBe(200);
+    at('2026-09-28', '10:04');
+    await scheduler.tick();
+    expect(sender.to('yuki').map((s) => s.payload.body)).toEqual([
+      'お母さんが「練習」を変更しました',
     ]);
   });
 
