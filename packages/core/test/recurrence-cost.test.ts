@@ -11,6 +11,7 @@ import {
   type RuleParts,
   ruleDensityError,
   ruleStarts,
+  seriesEnded,
   type Wall,
 } from '../src/recurrence';
 
@@ -631,6 +632,60 @@ describe('総点検のレビュー（4 回目）F1・F2: 繰り返しの上限�
     expect(r.recurrenceWorkForTest().probes - before).toBe(0);
     expect(performance.now() - t0).toBeLessThan(300);
   }, 30_000);
+});
+
+describe('総点検のレビュー（6 回目）H2: 終わった繰り返し', () => {
+  const pad = (n: number) => String(n).padStart(2, '0');
+  const triples: [number, number, number][] = [];
+  for (let a = 1; a <= 28 && triples.length < 800; a++)
+    for (let b = a + 1; b <= 28 && triples.length < 800; b++)
+      for (let c = b + 1; c <= 28 && triples.length < 800; c++) triples.push([a, b, c]);
+
+  it('UNTIL が範囲より前に終わった規則は、形から判定できなくても回の出ない期間を調べない（800 本）', async () => {
+    vi.resetModules();
+    const r = await import('../src/recurrence');
+    const rules = triples.map(([a, b, c]) => {
+      const p = r.parseRrule(
+        `FREQ=MONTHLY;BYDAY=MO,TU,WE,TH,FR;BYMONTHDAY=${a},${b},${c};BYSETPOS=1;UNTIL=20250101T235959`,
+      );
+      if (!p.ok) throw new Error(p.message);
+      return p.rule;
+    });
+    const before = r.recurrenceWorkForTest();
+    for (const [i, rule] of rules.entries()) {
+      const start = wall(addDays('2020-01-06', i), `${pad(6 + (i % 12))}:00`);
+      expect(r.ruleStarts(rule, start, wall('2030-01-01'), wall('2030-02-01'))).toEqual([]);
+    }
+    const after = r.recurrenceWorkForTest();
+    expect(after.densityWalks - before.densityWalks).toBe(0);
+    expect(after.probes - before.probes).toBe(0);
+    // 終わっていない範囲なら調べる（数え方が効いていることの確かめ）
+    const [first] = rules;
+    if (!first) throw new Error('規則がない');
+    r.ruleStarts(first, wall('2020-01-06', '06:00'), wall('2024-06-01'), wall('2024-07-01'));
+    expect(r.recurrenceWorkForTest().densityWalks - after.densityWalks).toBe(1);
+  });
+
+  it('seriesEnded: 今日より後（今日を含む）に始まる回がもうない規則だけが終わり', () => {
+    const at = (rrule: string, date: string, time = '09:00') => {
+      const p = parseRrule(rrule);
+      if (!p.ok) throw new Error(p.message);
+      return seriesEnded(p.rule, wall(date, time), '2026-09-28');
+    };
+    expect(at('FREQ=WEEKLY', '2020-01-06')).toBe(false);
+    expect(at('FREQ=WEEKLY;UNTIL=20260927T235959', '2026-01-05')).toBe(true);
+    expect(at('FREQ=DAILY;UNTIL=20260928T235959', '2026-01-05')).toBe(false);
+    expect(at('FREQ=DAILY;UNTIL=20260927', '2026-01-05', '00:00')).toBe(true);
+    // COUNT: 2026-06-01 から毎月 4 回＝9/1 が最後
+    expect(at('FREQ=MONTHLY;COUNT=4', '2026-06-01')).toBe(true);
+    expect(at('FREQ=MONTHLY;COUNT=5', '2026-06-01')).toBe(false);
+    // 今日に始まる回は終わっていない（時刻が過ぎていても）
+    expect(at('FREQ=DAILY;COUNT=3', '2026-09-26', '06:00')).toBe(false);
+    expect(at('FREQ=DAILY;COUNT=2', '2026-09-26', '06:00')).toBe(true);
+    // 毎年の COUNT が遠い先まで残っている
+    expect(at('FREQ=YEARLY;COUNT=90', '1970-03-01')).toBe(false);
+    expect(at('FREQ=YEARLY;COUNT=50', '1970-03-01')).toBe(true);
+  });
 });
 
 describe('総点検のレビュー（5 回目）G3: BYSETPOS は 7 個まで（1 期間ごとの計算を重くしない）', () => {

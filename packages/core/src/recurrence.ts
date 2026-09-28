@@ -12,6 +12,7 @@ import {
   daysInMonth,
   diffDays,
   isValidDate,
+  MAX_YEAR,
   parseDate,
   type TimeHM,
   WEEKDAY_LABELS,
@@ -428,9 +429,16 @@ function periodHasOccurrence(rule: RuleParts, periodStart: Wall): boolean {
   return onePeriod(rule, periodStart).after(toFloating(periodStart), true) !== null;
 }
 
-/** テスト用: 展開で行った重い仕事の数（rrule で 1 期間を数えた回数・足した期間の数）。直しを切り分けて確かめる */
-const work = { probes: 0, periodSteps: 0 };
-export function recurrenceWorkForTest(): { probes: number; periodSteps: number } {
+/**
+ * テスト用: 展開で行った重い仕事の数（rrule で 1 期間を数えた回数・足した期間の数・回の出ない期間を周期で
+ * たどった回数）。直しを切り分けて確かめる
+ */
+const work = { probes: 0, periodSteps: 0, densityWalks: 0 };
+export function recurrenceWorkForTest(): {
+  probes: number;
+  periodSteps: number;
+  densityWalks: number;
+} {
   return { ...work };
 }
 
@@ -549,6 +557,7 @@ function denseEnough(rule: RuleParts, dtstart: Wall, byShape = true): boolean {
   const key = `${formatRrule(ex)}|${((origin % g) + g) % g}`;
   const hit = densityCache.get(key);
   if (hit !== undefined) return hit;
+  work.densityWalks++;
 
   const byKind = new Map<string, boolean>();
   const produces = (y: number, m: number): boolean => {
@@ -662,6 +671,9 @@ export function ruleStarts(
   const fromD = toFloating(from);
   const toD = toFloating(to);
   if (toD <= fromD) return [];
+  // 範囲より前に終わった規則は、回の出ない期間を調べずに返す（終わった繰り返しは上限に数えないので、たくさんあっても
+  // 覚えるものを埋めない。総点検のレビュー 6 回目 H2）
+  if (rule.until !== null && untilDate(rule.until) < from.date) return [];
   if (!denseEnough(rule, dtstart)) return [];
   const moved = rebased(rule, dtstart, from);
   if (moved === 'ended') return [];
@@ -677,6 +689,21 @@ export function ruleStarts(
     return out.length < limit;
   });
   return out;
+}
+
+/**
+ * 終わった繰り返しか（今日（JST）以降に始まる回がもうない: UNTIL が今日より前か、COUNT を今日より前に使い切った）。
+ * 繰り返しの予定の上限（1 人 100 件）は終わっていないものだけを数える（総点検のレビュー 6 回目 H2。§24 D41）。
+ * COUNT は今日から 1 回だけ探す（開始を送るので、昔に始まった規則でも期間を 1 つずつ歩かない）。扱える最後の年
+ * （MAX_YEAR）より後にしか回がない規則は、どの画面にも出ないので終わりとみなす
+ */
+export function seriesEnded(rule: RuleParts, dtstart: Wall, today: DateISO): boolean {
+  if (rule.until !== null && untilDate(rule.until) < today) return true;
+  if (rule.count === null) return false;
+  const from = { date: today, time: '00:00' };
+  return (
+    ruleStarts(rule, dtstart, from, { date: `${MAX_YEAR}-12-31`, time: '00:00' }, 1).length === 0
+  );
 }
 
 /** 回の recurrenceId（§3: 時刻あり 'YYYY-MM-DDTHH:mm'、終日 'YYYY-MM-DD'） */

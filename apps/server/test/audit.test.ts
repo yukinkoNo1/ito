@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { events, members, pushSubscriptions } from '../src/db/schema';
 import { createFeedToken } from '../src/services/feed-tokens';
 import { insertRecord } from '../src/services/records';
+import { MAX_SERIES_WITH_ENDED_PER_OWNER } from '../src/services/series-limit';
 import { as, createEvent, IDS, LOGINS, seedFamily, syncAs, timed } from './family';
 import {
   createTestContext,
@@ -716,18 +717,21 @@ describe('総点検のレビュー（2 回目）D6: 時計が戻っても、失�
 });
 
 describe('総点検のレビュー（4 回目 F1・F2・5 回目 G1）: 繰り返しの予定は持ち主ごとに 100 件まで（展開で覚えるものを上回らない。ほかの人を締め出さない）', () => {
+  let seeded = 0;
   function seedSeries(
     n: number,
     deleted = 0,
     who: 'papa' | 'mama' | 'yuki' = 'papa',
     privately = false,
+    rrule = 'FREQ=WEEKLY',
+    from = '2026-01-01',
   ) {
     const owner = IDS[who];
     for (let i = 0; i < n + deleted; i++) {
-      const at = fromJst(addDays('2026-01-01', i % 300), '09:00');
+      const at = fromJst(addDays(from, i % 300), '09:00');
       const gone = i >= n;
       insertRecord(ctx.database.db, {
-        id: uuidv7(NOW + 50_000 + i),
+        id: uuidv7(NOW + 50_000 + seeded++),
         version: 1,
         title: `繰り返し ${i}`,
         note: null,
@@ -737,7 +741,7 @@ describe('総点検のレビュー（4 回目 F1・F2・5 回目 G1）: 繰り�
         endAt: null,
         startDate: null,
         endDate: null,
-        rrule: 'FREQ=WEEKLY',
+        rrule,
         exdates: [],
         parentId: null,
         recurrenceId: null,
@@ -862,5 +866,64 @@ describe('総点検のレビュー（4 回目 F1・F2・5 回目 G1）: 繰り�
       memberIds: [IDS.mama],
     });
     expect(mine.res.status).toBe(201);
+  });
+
+  it('H2 終わった繰り返し（UNTIL が過ぎた・COUNT を使い切った）は 100 件に数えない。ほかの人の「これ以降」も通る。終わっていないものは数える', async () => {
+    ctx = createTestContext(devEnv(), { now: NOW });
+    seedFamily(ctx);
+    seedSeries(60, 0, 'mama', false, 'FREQ=WEEKLY;UNTIL=20250101T235959', '2024-01-01');
+    seedSeries(39, 0, 'mama', false, 'FREQ=MONTHLY;COUNT=3', '2024-01-01');
+    seedSeries(1, 0, 'mama');
+    const made = await createEvent(ctx, 'mama', {
+      title: '習い事',
+      allDay: true,
+      startDate: '2026-10-05',
+      rrule: 'FREQ=WEEKLY',
+      memberIds: [IDS.mama],
+    });
+    expect(made.res.status).toBe(201);
+    const split = await send(ctx, 'PATCH', `/api/events/${made.event.id}`, {
+      headers: {
+        ...as('papa'),
+        'if-match': String(made.event.version),
+        'idempotency-key': 'h2-1',
+      },
+      body: {
+        scope: 'following',
+        recurrenceId: '2026-10-19',
+        exceptionId: uuidv7(NOW + 97),
+        changes: { title: '習い事（後半）' },
+      },
+    });
+    expect(split.status).toBe(200);
+    // 終わっていない繰り返し（まだ回の残る前の部分を含む）は数える: 3 件＋97 件で 100 件
+    seedSeries(97, 0, 'mama');
+    const over = await createEvent(ctx, 'mama', {
+      title: '101 件目',
+      allDay: true,
+      startDate: '2026-10-06',
+      rrule: 'FREQ=WEEKLY',
+      memberIds: [IDS.mama],
+    });
+    expect(over.res.status).toBe(409);
+    expect(((await over.res.json()) as { code: string }).code).toBe('series_limit');
+  });
+
+  it('H2 終わったものを含めた繰り返しは 1 人 400 件まで（展開で覚えるものを家族 8 人でも上回らない）', async () => {
+    ctx = createTestContext(devEnv(), { now: NOW });
+    seedFamily(ctx);
+    seedSeries(400, 0, 'yuki', false, 'FREQ=WEEKLY;UNTIL=20250101T235959', '2024-01-01');
+    const over = await createEvent(ctx, 'yuki', {
+      title: '新しい繰り返し',
+      allDay: true,
+      startDate: '2026-10-05',
+      rrule: 'FREQ=WEEKLY',
+      memberIds: [IDS.yuki],
+    });
+    expect(over.res.status).toBe(409);
+    const body = (await over.res.json()) as { code: string; detail: string };
+    expect(body.code).toBe('series_limit');
+    expect(body.detail).toContain('終わったもの');
+    expect(MAX_SERIES_WITH_ENDED_PER_OWNER * 8).toBeLessThan(4000);
   });
 });

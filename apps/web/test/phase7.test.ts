@@ -1,15 +1,25 @@
 import 'fake-indexeddb/auto';
-import { addDays, fakeClock, fromJst } from '@ito/core';
+import {
+  addDays,
+  canSeeContent,
+  compareOccurrences,
+  expandAll,
+  fakeClock,
+  fromJst,
+  type Occurrence,
+} from '@ito/core';
 import { describe, expect, it } from 'vitest';
 import type { Fetcher } from '../src/data/api';
+import type { LocalEvent } from '../src/data/db';
 import { ItoDb } from '../src/data/db';
 import { DataStore } from '../src/data/store';
 import { downloadExport, fileNameOf } from '../src/pwa/export';
 import { isDeniedNavigation } from '../src/pwa/nav-denylist';
 import { splitLinks } from '../src/ui/labels';
 import { MOCK_TODAY, mockContext, mockEvents } from '../src/ui/mock';
+import type { OccurrenceVM, SearchGroupVM } from '../src/ui/types';
 import { buildFreeTimeVM } from '../src/viewmodels/free';
-import type { VmContext } from '../src/viewmodels/occurrence';
+import { matchesFilter, toOccurrenceVM, type VmContext } from '../src/viewmodels/occurrence';
 import {
   buildFlowScreen,
   countFlowFresh,
@@ -36,6 +46,58 @@ const ctx: VmContext = {
   freshSince: null,
 };
 
+/**
+ * 前の検索のやり方（前後 1 年を全部展開してから探す）。速くした検索と結果が同じことを確かめる正解。
+ * 開始が同じ回の並びは、前は展開の順しだいだったので、カレンダーと同じ回の並び（§13.1）にそろえてある
+ */
+function referenceSearch(
+  events: readonly LocalEvent[],
+  query: string,
+  filter: string[] | null,
+  c: VmContext,
+): SearchGroupVM[] {
+  const terms = searchTerms(query);
+  if (terms.length === 0) return [];
+  const norm = (t: string) => t.normalize('NFKC').toLowerCase();
+  const matches = (e: LocalEvent) =>
+    terms.every((t) =>
+      norm([e.title ?? '', e.location ?? '', e.note ?? ''].join(String.fromCharCode(10))).includes(
+        t,
+      ),
+    );
+  const visible = events.filter((e) => canSeeContent(e, c.meId));
+  const todayMs = fromJst(c.today);
+  const upcoming = (o: Occurrence<LocalEvent>) =>
+    o.endMs !== null ? o.endMs > todayMs : o.startMs >= todayMs;
+  const bySeries = new Map<string, { o: Occurrence<LocalEvent>; vm: OccurrenceVM }>();
+  for (const o of expandAll(
+    visible,
+    fromJst(addDays(c.today, -366)),
+    fromJst(addDays(c.today, 367)),
+  )) {
+    if (!matches(o.event)) continue;
+    const vm = toOccurrenceVM(o, c);
+    if (!matchesFilter(vm, filter)) continue;
+    const current = bySeries.get(o.seriesId);
+    if (!current || (!upcoming(current.o) && (upcoming(o) || o.startMs > current.o.startMs))) {
+      bySeries.set(o.seriesId, { o, vm });
+    }
+  }
+  const vms = [...bySeries.values()];
+  const soon = vms.filter(({ o }) => upcoming(o)).sort((x, y) => compareOccurrences(x.o, y.o));
+  const past = vms
+    .filter(({ o }) => !upcoming(o))
+    .sort((x, y) => y.o.startMs - x.o.startMs || compareOccurrences(x.o, y.o));
+  return [...soon, ...past]
+    .slice(0, 50)
+    .map(({ vm }) => ({ dateLabel: vm.startDate, items: [vm] }));
+}
+
+/** 比べやすい形（日付の見出しをほどいて、回の key と日付の並びにする） */
+function flat(groups: SearchGroupVM[]): string[] {
+  return groups.flatMap((g) => g.items.map((i) => `${i.key}|${i.startDate}`));
+}
+
 describe('検索は文字で絞ってから展開する（総点検のレビュー 5 回目 G2）', () => {
   const perf = (globalThis as unknown as { performance: { now(): number } }).performance;
   it('毎日の繰り返しが 800 本あっても、合うものがない検索は 100ms 未満', () => {
@@ -51,6 +113,81 @@ describe('検索は文字で絞ってから展開する（総点検のレビュ�
     expect(perf.now() - t0).toBeLessThan(100);
   });
 
+  it('合う繰り返しが 800 本あっても、長いメモの繰り返しが 100 本あっても、1 回の検索は 100ms 未満（6 回目 H1）', () => {
+    const events = Array.from({ length: 800 }, (_, i) =>
+      ev({ title: `ごみ ${i}`, rrule: 'FREQ=DAILY', startAt: '2026-01-05T07:00:00+09:00' }),
+    );
+    searchOccurrences(events, 'ごみ 1', null, ctx);
+    let t0 = perf.now();
+    expect(searchOccurrences(events, 'ごみ', null, ctx).length).toBeGreaterThan(0);
+    // 直す前はおよそ 2 秒（合うシリーズを前後 1 年ずつ展開していた）
+    expect(perf.now() - t0).toBeLessThan(100);
+    const note = '今日の予定と持ち物の確認。病院の予約と買い物のメモ。'.repeat(80).slice(0, 2000);
+    const long = Array.from({ length: 100 }, (_, i) =>
+      ev({ title: `用事 ${i}`, note, rrule: 'FREQ=DAILY', startAt: '2026-01-05T09:00:00+09:00' }),
+    );
+    searchOccurrences(long, '予定', null, ctx);
+    t0 = perf.now();
+    expect(searchOccurrences(long, 'の', null, ctx).length).toBeGreaterThan(0);
+    expect(perf.now() - t0).toBeLessThan(100);
+  });
+
+  it('決まった乱数で作った予定（繰り返し・この回だけ変更・取り消し・非公開・終日・人の絞り込み）で、前のやり方と結果が同じ（6 回目 H1）', () => {
+    let seed = 99;
+    const rand = (n: number) => {
+      seed = (seed * 1103515245 + 12345) % 2147483648;
+      return seed % n;
+    };
+    const words = ['歯医者', '塾', 'サッカー', '買い物', '病院', '会議'];
+    const owners = [M.papa, M.mama, M.yuki];
+    for (let round = 0; round < 20; round++) {
+      const events: LocalEvent[] = [];
+      for (let i = 0; i < 30; i++) {
+        const owner = owners[rand(3)] as string;
+        const allDay = rand(4) === 0;
+        const day = addDays('2026-09-28', rand(900) - 450);
+        const base = ev({
+          title: `${words[rand(words.length)]} ${i}`,
+          location: rand(3) === 0 ? words[rand(words.length)] : null,
+          allDay,
+          ...(allDay
+            ? { startAt: undefined, startDate: day, endDate: addDays(day, rand(3)) }
+            : { startAt: `${day}T${String(6 + rand(15)).padStart(2, '0')}:00:00+09:00` }),
+          rrule: ['FREQ=DAILY', 'FREQ=WEEKLY', 'FREQ=MONTHLY;COUNT=5', null][rand(4)] ?? null,
+          ownerId: owner,
+          memberIds: [owner],
+          visibility: rand(5) === 0 ? 'private' : 'family',
+          exdates: [],
+        });
+        events.push(base);
+        if (base.rrule && rand(2) === 0 && !allDay) {
+          const d = addDays(day, 7);
+          events.push(
+            ev({
+              title: `${words[rand(words.length)]}（変更）`,
+              parentId: base.id,
+              recurrenceId: `${d}T${(base.startAt ?? '').slice(11, 16)}`,
+              startAt: `${d}T12:00:00+09:00`,
+              ownerId: owner,
+              memberIds: [owner],
+              visibility: base.visibility,
+            }),
+          );
+        }
+      }
+      for (const q of ['歯医者', '病院', '変更', 'サッカー 1', '会']) {
+        for (const f of [null, [M.mama]]) {
+          expect([round, q, f, flat(searchOccurrences(events, q, f, ctx))]).toEqual([
+            round,
+            q,
+            f,
+            flat(referenceSearch(events, q, f, ctx)),
+          ]);
+        }
+      }
+    }
+  }, 120_000);
+
   it('本体は合わず「この回だけ変更」の回だけが合うシリーズも見つかる', () => {
     const series = ev({
       title: '水泳',
@@ -65,6 +202,31 @@ describe('検索は文字で絞ってから展開する（総点検のレビュ�
     });
     const found = searchOccurrences([series, exception], '記録会', null, ctx);
     expect(found.flatMap((g) => g.items.map((i) => i.title))).toEqual(['水泳（記録会）']);
+  });
+
+  it('過ぎた回は、近い窓にかかる長い回より開始の遅い回が窓の外にあっても、開始のいちばん遅い回を出す（6 回目 H1）', () => {
+    // 3 日間の終日を 2 回（9/12〜14 と 9/19〜21）。9/12 の回を 9/20 の 1 日だけに動かす。
+    // 今日の前 7 日の窓（9/21〜）には 9/19 の回だけがかかり、開始の遅い 9/20 の回はかからない
+    const series = ev({
+      title: '合宿',
+      allDay: true,
+      startAt: undefined,
+      startDate: '2026-09-12',
+      endDate: '2026-09-14',
+      rrule: 'FREQ=WEEKLY;COUNT=2',
+    });
+    const moved = ev({
+      title: '合宿',
+      allDay: true,
+      startAt: undefined,
+      parentId: series.id,
+      recurrenceId: '2026-09-12',
+      startDate: '2026-09-20',
+      endDate: '2026-09-20',
+    });
+    const found = searchOccurrences([series, moved], '合宿', null, ctx);
+    expect(flat(found)).toEqual([`${series.id}@2026-09-12|2026-09-20`]);
+    expect(flat(found)).toEqual(flat(referenceSearch([series, moved], '合宿', null, ctx)));
   });
 });
 

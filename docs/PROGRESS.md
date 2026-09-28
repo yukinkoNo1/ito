@@ -1,5 +1,5 @@
 # 進み具合
-今: 最終確認 / 次にやること: 総点検の修正のレビュー（ワークフロー wf_591760cc-3aa。途中で止めた。再開は resumeFromRunId で。レビュー 3 本は終わり、反証の途中）の結果を反映 → RUNBOOK の最終確認のコマンド（pnpm install --frozen-lockfile・pnpm check・pnpm build・pnpm test:e2e・docker compose build・up -d --wait・exec app node dist/cli.js feed-token list・down）→ 受け入れ基準の見直し → 最終報告
+今: 最終確認 / 次にやること: RUNBOOK の最終確認のコマンド（pnpm install --frozen-lockfile・pnpm check・pnpm build・pnpm test:e2e・docker compose build・up -d --wait・exec app node dist/cli.js feed-token list・down）→ 受け入れ基準の見直し → 最終報告
 
 ## ステップ
 | ステップ | 状態（未着手・作業中・完了） | タグ | メモ |
@@ -130,7 +130,9 @@
 | 総点検 | 修正のレビュー（1 回目） | 総点検の修正（32fce57）を 3 観点で別のエージェントがレビューし、指摘ごとに反証 → 確かめられた 10 件（C1〜C10。高 1・中 3・低 6）を、失敗する再現テストを書いてから直した（bad774b。docs/security-review.md「修正のレビュー（1 回目）」、§24 D41） | OK（core recurrence-cost.test.ts・ids-text.test.ts、server audit.test.ts「C5〜C10」・notify.test.ts「C4」「C8」・perf.test.ts・architecture.test.ts、`node scripts/check-dev.mjs` EXIT=0） |
 | 総点検 | 修正のレビュー（2 回目） | 1 回目の直し（bad774b）を同じやり方でレビュー → 確かめられた 10 件（2 回目の D1〜D10。高 1・中 2・低 7）を、失敗する再現テストを書いてから直した（93bdb5d。docs/security-review.md「修正のレビュー（2 回目）」、§24 D41） | OK（core recurrence-cost.test.ts（形からの判定と周期をたどる判定の比べ・COUNT の毎月・毎年の乱数の比べを含む）、server notify.test.ts「D5」・audit.test.ts「D6」、web phase7.test.ts「D8」「D10」、E2E phase7.spec.ts「§19 端で読み足している最中に「次の週」で移っても…」） |
 | 総点検 | 修正のレビュー（3 回目） | 2 回目の直し（93bdb5d）をレビュー → 確かめられた 4 件（E1〜E4。中 2・低 2）を、失敗する再現テストを書いてから直した（045c38d。docs/security-review.md「修正のレビュー（3 回目）」、§24 D41） | OK（core recurrence-cost.test.ts「E1」「E2」、E2E phase7.spec.ts「§19 …「次の週」で移っても…」（直しを外すと落ちることを確かめた）、web phase7.test.ts「sortMembersKeepingSame」、architecture.test.ts「useMembers は…」） |
-| 総点検 | 修正のレビュー（4 回目） | 3 回目の直し（045c38d）をレビュー → 確かめられた 6 件（F1〜F6。高 1・中 3・低 2）を直した（752d180・2316e6f・5e0262d。繰り返しの予定は家族で 500 件まで、E1・E2 のテストは仕事の数で確かめる。docs/security-review.md「修正のレビュー（4 回目）」、§24 D41 (13)） | OK（server audit.test.ts「F1・F2 …」、core recurrence-cost.test.ts「E1」「E2」（直しを外すと落ちることを確かめた）「F1」「F2」） |
+| 総点検 | 修正のレビュー（4 回目） | 3 回目の直し（045c38d）をレビュー → 確かめられた 6 件（F1〜F6。高 1・中 3・低 2）を直した（752d180・2316e6f・5e0262d。繰り返しの予定の上限、E1・E2 のテストは仕事の数で確かめる。docs/security-review.md「修正のレビュー（4 回目）」、§24 D41 (13)） | OK（server audit.test.ts「F1・F2 …」、core recurrence-cost.test.ts「E1」「E2」（直しを外すと落ちることを確かめた）「F1」「F2」） |
+| 総点検 | 修正のレビュー（5 回目） | 4 回目の直しをレビュー → 確かめられた 6 件（G1〜G6。中 2・低 4）を、失敗する再現テストを書いてから直した（982819a。繰り返しの上限は持ち主ごとに 100 件、検索は文字で絞ってから展開、BYSETPOS は 7 個まで、ゴミ箱から戻せない理由を出す。docs/security-review.md「修正のレビュー（5 回目）」、§24 D41 (13)〜(16)） | OK（server audit.test.ts「G1 …」「持ち主の繰り返しが 100 件あるとき…」、web phase7.test.ts「G2」「G4」、core recurrence-cost.test.ts「G3」「E1」） |
+| 総点検 | 修正のレビュー（6 回目） | 5 回目の直しをレビュー → 確かめられた 2 件（H1・H2。低 2）を、失敗する再現テストを書いてから直した（検索は合うシリーズを今日から広げる窓で展開し、行ごとに 1 回だけ確かめる。繰り返しの上限は終わっていないもの 100 件・終わったものを含めて 400 件。docs/security-review.md「修正のレビュー（6 回目）」、§24 D41 (17)(18)）。深刻度が下がりきったのでレビューはここで止めた | OK（web phase7.test.ts「…6 回目 H1」3 件、server audit.test.ts「H2 …」2 件、core recurrence-cost.test.ts「…6 回目）H2…」） |
 | 総点検 | E2E の long task（52ms で落ちた 1 件）の原因を調べて直す | Chrome のトレースと CPU プロファイル（一時的な調べるための spec。調べたあとに消した）→ 端で足すたびに 140 日分を組み立て直して描き直すタスクと描画のタスクが 50ms すれすれ → 変わらない日を描き直さない・日ごとにレイアウトと描画を閉じ込める・位置の合わせ直しを次の描画の直前に（§24 D40）。しきい値と測り方は変えていない | OK（同じ測り方で最大 52.3ms → 34.7ms、描画のタスクはなくなった。web phase7.test.ts「これからの一覧の描き直しを小さくする」、`pnpm test:e2e` 56 件） |
 | Phase 6 | `pnpm check`・`pnpm test:e2e`・`pnpm build`・`docker compose build` | `pnpm check`（261 件）、`pnpm test:e2e`（39 件）、`pnpm build`、`docker compose build` | OK（すべて EXIT=0） |
 
@@ -190,6 +192,8 @@
 - （解決済み。§24 D40）E2E の「§19 これからの一覧…long task」が総点検の途中で 1 回 52ms で落ちた。Chrome のトレースで調べると、端で足すたびに 140 日分を組み立て直して描き直すタスク（39〜50ms）と、そのあとの描画のタスク（44〜52ms）が 50ms すれすれで、揺れではなく余裕がなかった（文脈と家族の一覧が描き直しのたびに新しいオブジェクトになり、関係のない描き直しでも一覧を組み立て直していたのも一因）。変わらない日を描き直さない・日ごとにレイアウトと描画を閉じ込める・位置の合わせ直しを次の描画の直前に移す、で直した。同じ測り方で最大 34.7ms、描画のタスクはなくなった。しきい値と測り方は変えていない
 - 初回表示の JS は gzip で 199KB（§19 の上限 200KB に近い。総点検で core に展開の検査を足したため）。これ以上足すときは、開いたときに読む画面にさらに分ける
 - テストの購読の送り先を、プッシュサービスの形（https://fcm.googleapis.com/fcm/send/…・https://web.push.apple.com/…）に変えた（総点検 B4 で送り先をプッシュサービスに限ったため。確かめる中身は同じ）
+- テストを直したもの（総点検の修正のレビュー 6 回目）: server audit.test.ts の seedSeries に規則と開始日を渡せるようにし、ID は呼ぶたびに続きから振るようにした（H2 のテストで 1 つのテストの中から何度も呼ぶため。前からのテストの確かめる中身は同じ）
+- テストを直したもの（総点検の修正のレビュー 5 回目）: server audit.test.ts の「500 件あるとき…」を「持ち主の繰り返しが 100 件あるとき…」に書き換えた（上限を家族全体の 500 件から持ち主ごとの 100 件に変えたため。家族全体で数えるのは G1 の締め出しの穴だった。§24 D41 (13)）。core recurrence-cost.test.ts の上限いっぱいのテストを 500 本から 800 本（1 人 100 件 × 8 人）にした
 - テストを直したもの（総点検の修正のレビュー 2 回目）: server notify.test.ts の C8 のテストを「上限の中なら引き継ぎ、上限なら前の持ち主から外して 409」に書き換えた（1 回目の直し「引き継ぎは数えない」が、2 人がかりで上限を超えられる穴だったため。§24 D41 (8)）。core recurrence-cost.test.ts の比べる正解（素の rrule）で、同じ日時は 1 つにまとめるようにした（展開は BYSETPOS の重複を 1 回にするため。§24 D41 (4)）
 - テストを直したもの（総点検の修正のレビュー）: server notify.test.ts「1 人の購読は 10 台まで…」の「ほかの家族の端末を引き継ぐときも数える（409）」を外し、「ほかの家族の端末を引き継ぐ…ときは台数に数えない…」を足した（前の期待は C8 の不具合そのものだった。§24 D41 (8)）
 - テストを直したもの（総点検）: server middleware.test.ts の「GET には CSRF の検査を掛けない（クロスサイトの Origin・Sec-Fetch-Site でも 200）」「ホーム画面・通知から開くとき（Sec-Fetch-Site: none、Origin なし）の GET も通る」を、§24 D39 の新しい決まり（/api/* の GET は X-Ito-Client と same-origin が要る・ページの遷移には掛けない）を確かめるテストに書き換えた（前の決まりそのものが A3・A4 の穴だった）。export.test.ts の「X-Ito-Client がない」要求は、テストの send() が GET にも X-Ito-Client を付けるようにしたので、明示して外した（確かめる中身は同じ）。E2E phase2.spec.ts で許すコンソールエラーを、/api/export だけから /api と /%61pi への遷移の 4xx に広げた（A5 で遷移の形を足したため。URL で絞っている）
