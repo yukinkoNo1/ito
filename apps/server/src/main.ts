@@ -47,7 +47,12 @@ async function main(): Promise<void> {
         : null,
       // スケジューラ（1 分ごと。§15）。shutdown で止める
       jobs: ({ database }) => {
-        const scheduler = createScheduler({ db: database.db, clock: systemClock, sender, logger });
+        // バックアップ（3:30）と掃除（4:00）も同じスケジューラで行う（§15）
+        const scheduler = createScheduler(
+          { db: database.db, clock: systemClock, sender, logger },
+          undefined,
+          { backupDir: env.BACKUP_DIR, backupKeep: env.BACKUP_KEEP },
+        );
         scheduler.start();
         return [scheduler];
       },

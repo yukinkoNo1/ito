@@ -3,6 +3,7 @@ import type Database from 'better-sqlite3';
 import { Hono } from 'hono';
 import { bodyLimit } from 'hono/body-limit';
 import { every } from 'hono/combine';
+import { compress } from 'hono/compress';
 import type { Db } from './db/client';
 import type { Env } from './env';
 import { ApiError, problemResponse } from './errors';
@@ -13,6 +14,7 @@ import { hostCheck } from './middleware/host';
 import { identity } from './middleware/identity';
 import { securityHeaders } from './middleware/security-headers';
 import { registerEventRoutes } from './routes/events';
+import { registerExportRoutes } from './routes/export';
 import { registerFeedRoutes } from './routes/feed';
 import { registerMeRoutes } from './routes/me';
 import { registerMemberRoutes } from './routes/members';
@@ -117,12 +119,17 @@ export function createApp(deps: AppDeps): App {
     return userChain(c, next);
   });
 
+  // 全件同期は大きくなる（1 年分で約 1.4MB）ので gzip で送る（§19 の 1MB は転送量。§24 D38）。
+  // 応答には送り手が入れた秘密（CSRF のトークンなど）を返さないので、圧縮による推測（BREACH）の対象にならない
+  app.use('/api/sync', compress({ encoding: 'gzip' }));
+
   registerFeedRoutes(app, deps);
   registerMeRoutes(app, deps);
   registerEventRoutes(app, deps);
   registerMemberRoutes(app, deps, (memberId) => countSubscriptions(db, memberId));
   registerPushRoutes(app, { ...deps, push: deps.push ?? { publicKey: null, sender: null } });
   registerParseRoutes(app, { ...deps, ai: deps.ai ?? null });
+  registerExportRoutes(app, deps);
 
   if (deps.staticDir) app.use('*', staticFiles(deps.staticDir));
 

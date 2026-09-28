@@ -38,4 +38,6 @@ export const DEVICE_KEYS = {
   notificationsNoticeDismissed: 'notice.notifications.dismissed',
   textSize: 'textSize',
   theme: 'theme',
+  /** 最近の検索語（S-10。端末ごと） */
+  recentQueries: 'search.recent',
 } as const;

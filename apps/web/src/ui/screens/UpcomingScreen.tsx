@@ -236,9 +236,11 @@ export default function UpcomingScreen(props: FlowScreenProps) {
     el?.scrollIntoView({ block: 'start' });
   }, [anchorKey]);
 
-  // 上下の端で追加読み込み（利用者がスクロールしたときだけ。最初に今日へ合わせたスクロールでは読まない）
+  // 上下の端で追加読み込み（利用者がスクロールしたときだけ。最初に今日へ合わせたスクロールでは読まない）。
+  // 足すとき・反対側を削るとき（§19）は、見えている最初の行の位置を覚えておき、描き直したあとに合わせる
+  // （Safari にはスクロールアンカーがない）
   const userScrolled = useRef(false);
-  const prependFromBottom = useRef<number | null>(null);
+  const pendingAnchor = useRef<{ key: string; top: number } | null>(null);
   const reachStart = useRef(props.onReachStart);
   const reachEnd = useRef(props.onReachEnd);
   reachStart.current = props.onReachStart;
@@ -251,18 +253,27 @@ export default function UpcomingScreen(props: FlowScreenProps) {
       // 一覧が画面に収まってスクロールできないときも、触ったら続きを読む
       if (root.scrollHeight - root.clientHeight < EDGE_PX) reachEnd.current();
     };
+    const captureAnchor = () => {
+      if (pendingAnchor.current !== null) return false;
+      const rootTop = root.getBoundingClientRect().top;
+      for (const el of root.querySelectorAll<HTMLElement>('[data-item-key]')) {
+        const rect = el.getBoundingClientRect();
+        if (rect.bottom <= rootTop) continue;
+        const anchor = { key: el.dataset.itemKey ?? '', top: rect.top - rootTop };
+        pendingAnchor.current = anchor;
+        // これ以上広げられなかったとき（一覧が変わらないとき）は、位置の保持をやめる
+        window.setTimeout(() => {
+          if (pendingAnchor.current === anchor) pendingAnchor.current = null;
+        }, 500);
+        return true;
+      }
+      return false;
+    };
     const onScroll = () => {
       if (!userScrolled.current) return;
-      if (root.scrollTop < EDGE_PX && prependFromBottom.current === null) {
-        const fromBottom = root.scrollHeight - root.scrollTop;
-        prependFromBottom.current = fromBottom;
-        reachStart.current();
-        // これ以上前へ広げられなかったとき（一覧が変わらないとき）は、位置の保持をやめる
-        window.setTimeout(() => {
-          if (prependFromBottom.current === fromBottom) prependFromBottom.current = null;
-        }, 500);
-      }
-      if (root.scrollHeight - root.scrollTop - root.clientHeight < EDGE_PX) reachEnd.current();
+      if (root.scrollTop < EDGE_PX && captureAnchor()) reachStart.current();
+      if (root.scrollHeight - root.scrollTop - root.clientHeight < EDGE_PX && captureAnchor())
+        reachEnd.current();
     };
     const inputs = ['wheel', 'touchstart', 'keydown', 'pointerdown'] as const;
     for (const type of inputs) root.addEventListener(type, markUser, { passive: true });
@@ -291,12 +302,16 @@ export default function UpcomingScreen(props: FlowScreenProps) {
     return () => observer.disconnect();
   }, [today, items]);
 
-  // 前に足したときは、見ていた位置を保つ（Safari にはスクロールアンカーがない）
+  // 足した・削ったあとは、見ていた行を同じ位置に戻す
   useLayoutEffect(() => {
     const root = scrollRef.current;
-    if (!root || prependFromBottom.current === null || items.length === 0) return;
-    root.scrollTop = root.scrollHeight - prependFromBottom.current;
-    prependFromBottom.current = null;
+    const anchor = pendingAnchor.current;
+    if (!root || anchor === null || items.length === 0) return;
+    pendingAnchor.current = null;
+    const el = root.querySelector<HTMLElement>(`[data-item-key="${CSS.escape(anchor.key)}"]`);
+    if (!el) return;
+    root.scrollTop +=
+      el.getBoundingClientRect().top - root.getBoundingClientRect().top - anchor.top;
   }, [items]);
 
   const filters: { id: string; label: string; value: string[] | null }[] = [

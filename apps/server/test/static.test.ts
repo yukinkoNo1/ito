@@ -64,11 +64,16 @@ describe('静的配信（SPEC §20）', () => {
         disabledAt: null,
       })
       .run();
-    for (const p of ['/api/export', '/api', '/api/nothing/here']) {
+    for (const p of ['/api/export?format=json', '/api', '/api/nothing/here']) {
       const res = await send(ctx, 'GET', p, {
-        headers: { accept: 'text/html', ...tsUser('mama@example.com') },
+        headers: {
+          accept: 'text/html',
+          'sec-fetch-mode': 'navigate',
+          ...tsUser('mama@example.com'),
+        },
       });
-      expect(res.status).toBe(404);
+      // /api/export はページ遷移では使えない（403。Phase 7 で経路ができた）。ない経路は 404
+      expect(res.status).toBe(p.startsWith('/api/export') ? 403 : 404);
       expect(res.headers.get('content-type')).toContain('application/problem+json');
       expect(await res.text()).not.toContain('<title>');
     }

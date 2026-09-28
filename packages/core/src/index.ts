@@ -1,5 +1,6 @@
 export * from './clock';
 export * from './events';
+export * from './freebusy';
 export * from './holidays';
 export * from './ids';
 export * from './jst';

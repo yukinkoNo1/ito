@@ -1,4 +1,4 @@
-import { addDays, type DateISO } from '@ito/core';
+import { addDays, type DateISO, maxDate, minDate } from '@ito/core';
 import { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router';
 import { useEvents, useMe, useMeta } from '../../app/data-context';
@@ -26,6 +26,11 @@ import { buildFlowScreen, FLOW_WINDOW_DAYS, shiftWeek } from '../../viewmodels/s
 
 /** 端で足す日数と、足せる範囲（今日から過去 1 年・未来 3 年） */
 const EXTEND_DAYS = 28;
+/**
+ * 一度に描く範囲の上限（§19「表示範囲の前後 8 週だけ描画し、端で追加読み込み」）。足したら反対側の端を削る
+ * （見ている位置は UpcomingScreen が行の key で保つ）
+ */
+export const MAX_FLOW_DAYS = FLOW_WINDOW_DAYS * 2 + EXTEND_DAYS;
 const PAST_LIMIT = -366;
 const FUTURE_LIMIT = 366 * 3;
 
@@ -172,8 +177,14 @@ export function FlowContainer() {
       onOpenSearch={() => navigate('/search')}
       onPickExample={(text) => nav.openComposer({ text, date: selectedDate })}
       onPrevWeek={() => jumpTo(shiftWeek(selectedDate, -1))}
-      onReachEnd={() => setRange({ from, to: clamp(addDays(to, EXTEND_DAYS)) })}
-      onReachStart={() => setRange({ from: clamp(addDays(from, -EXTEND_DAYS)), to })}
+      onReachEnd={() => {
+        const next = clamp(addDays(to, EXTEND_DAYS));
+        setRange({ from: maxDate(from, addDays(next, -MAX_FLOW_DAYS)), to: next });
+      }}
+      onReachStart={() => {
+        const next = clamp(addDays(from, -EXTEND_DAYS));
+        setRange({ from: next, to: minDate(to, addDays(next, MAX_FLOW_DAYS)) });
+      }}
       onSetFilter={setFilter}
     />
   );

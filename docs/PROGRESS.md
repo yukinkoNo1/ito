@@ -66,7 +66,7 @@
 | Phase 6 | §6.2 日付へ 2 タップ | E2E「特定の日に移動する: 2 タップ（「日付」→ その月の日）、週の帯なら 1 タップ」 | OK（ほかの月は「次の月」で 1 タップ増える。週の帯なら 1 タップ） |
 | Phase 6 | §6.2 予定の追加 3 タップ | E2E「予定を追加する: 3 タップ（入力バー → 最近の予定の札 → 保存）」（サーバーに 1 件増える） | OK（「一言を書いて保存」は Phase 5 で後で確認） |
 | Phase 6 | §6.2 予定の時刻を直す | E2E「予定の時刻を直す: 詳細の日時 → 時刻の札 → 保存（編集画面を経由しない）」（長さを保って 15:00–15:30） | OK |
-| Phase 6 | §6.2 空き → この時間で書く → 保存 | — | 後で確認（Phase 7 で空き時間の候補をつなぐ） |
+| Phase 6 | §6.2 空き → この時間で書く → 保存 | E2E phase7.spec.ts「§6.2 みんなが空いている時間に予定を入れる…」 | OK（Phase 7 で確認） |
 | Phase 6 | §6.2 家族の追加・変更に気づく | E2E phase2「別のメンバーが追加した予定に「新」が付き…」「背面に回して前面に戻したときも…」 | OK |
 | Phase 6 | 「大きめ」の文字でも崩れない | E2E「「大きめ」の文字でも崩れない」（html の文字 18.4px、9 画面＋4 つのシートで横にはみ出さない・縦にスクロールする箱の中の横はみ出しもない）、E2E「ギャラリーの全部の状態で…「大きめ」でも横にはみ出さない」 | OK |
 | Phase 6 | ギャラリーと本番画面のスクリーンショットが一致 | E2E「ギャラリーの状態と本番の画面のスクリーンショットが一致する」（見本の予定を API で入れ、page.clock で 2030-09-29 14:18 に止めて、これから・月の `.app-shell` の PNG がバイト単位で同じ） | OK（詳細・書く画面・設定は、サーバーの作成・更新の時刻が実時刻のため比べない） |
@@ -109,6 +109,15 @@
 | Phase 5 | レビューの指摘（§24 D37 (10)） | core nlp-rules.test.ts「ルール解析のレビューの指摘（Phase 5）」（10 件）・「呼び名は長い順に…」、server parse.test.ts「Phase 5 のレビューの指摘」（3 件）、web phase5.test.ts「一言と札の組み合わせ」「重なりの警告の範囲」、E2E phase5.spec.ts「非公開の「最近の予定」を…」 | OK |
 | Phase 5 | `pnpm check`・`pnpm test:e2e`・`docker compose build`・`up -d --wait` | `pnpm check`（Vitest 554 件）、`pnpm test:e2e`（50 件）、`docker compose build`・`up -d --wait`・`exec app node dist/cli.js feed-token list`・`down` | OK（すべて EXIT=0） |
 | Phase 6 | §6.2「一言を書いて保存」の手数 | E2E phase5.spec.ts（入力バーを押す → 一言を書く → 「…に保存」を押す。タップは 2 回） | OK（Phase 5 で確認） |
+| Phase 7 | 空き時間（core/freebusy。夜・休日・終日、今日は切り上げた今より後、busy=false は除く、他人の非公開は中身なしでふさぐ、終了なしは 60 分、日付をまたぐ予定は翌日も） | core test/freebusy.test.ts（11 件）、web phase7.test.ts「空き時間の VM」 | OK |
+| Phase 7 | §6.2 空き → この時間で書く → 保存 | E2E phase7.spec.ts「§6.2 みんなが空いている時間に予定を入れる…」（空き → 「この時間で書く」→ 一言 → 保存。候補の日時で保存される） | OK（Phase 6 の「後で確認」を確かめた） |
+| Phase 7 | 検索（件名・場所・メモ、人で絞り込み、最近の検索語、他人の非公開は出ない） | web phase7.test.ts「検索（§6 S-10）」（6 件）、E2E phase7.spec.ts「検索: …」 | OK |
+| Phase 7 | 書き出し JSON・ICS（VTIMEZONE、終日の DTEND は翌日、例外は RECURRENCE-ID、他人の非公開は含めない） | server export.test.ts（9 件）、web phase7.test.ts「書き出し（§17）」、E2E phase7.spec.ts「書き出し」（JSON はダウンロード、ICS は iPhone の共有シート） | OK（iPhone のカレンダーへの取り込みは要確認） |
+| Phase 7 | バックアップと掃除（14 世代のローテーション） | server maintenance.test.ts（掃除・VACUUM INTO・14 世代・スケジューラの時刻） | OK |
+| Phase 7 | 性能: 1 年分の同期サイズ・表示用フィード（20KB 未満・100ms 未満・304）・60fps（50ms を超える long task なし） | server perf.test.ts（約 2,200 行で gzip の転送量 1MB 未満、フィード 3 日分）、E2E phase7.spec.ts「§19 これからの一覧…」（毎日 8 本＋毎週 4 本の 1 年分でスクロール。範囲を足して削り、long task なし） | OK（§24 D38 (5) (6)） |
+| Phase 7 | T7 ビルド成果物の検査 | `pnpm build` の最後の `scripts/check-dist.mjs`（見つけたら EXIT=1。わざと入れた X-Dev-Login を見つけることを確かめた） | OK |
+| Phase 7 | §18 の表の対応表 | docs/security-map.md | OK |
+| Phase 7 | 依存の監査 | `pnpm audit --prod`（0 件）、`pnpm audit`（drizzle-kit の中の esbuild の moderate 1 件。開発用の道具でバンドルに入らない） | OK（既知の問題に記録） |
 | Phase 6 | `pnpm check`・`pnpm test:e2e`・`pnpm build`・`docker compose build` | `pnpm check`（261 件）、`pnpm test:e2e`（39 件）、`pnpm build`、`docker compose build` | OK（すべて EXIT=0） |
 
 ## 決めたこと（SPEC §24 に書いたもの）
@@ -134,12 +143,11 @@
 - D34: Phase 3 のレビューで決めた繰り返しの細則（差分だけを送る、消える件数の共通の計算、破棄した例外行は消す、毎月の規則の移動、RRULE の並びと比べ方、この回だけ変更の元に戻す、回の送信待ちの 409・404、「この予定だけ」の制限、保存したあとの回へ移る、rrule の ESM）
 - D35: 通知の細則（この端末の印、送信の記録と再送、まとめ・予告、家族の変更のまとめ待ち、通知の文と url、テスト通知、鍵がないとき、自分への通知の候補と保存、SW の知らせ、E2E の push）
 - D36: Phase 4 のレビューで決めた通知の細則（自分で止めた印、まとめ待ちの件名の見え方と消し方・同じ人だけまとめる・読んだ行だけ片づける、renotify、終日⇔時刻ありの通知と行の書き換え、最初の回の「これ以降」、公開鍵の状態と文言、ready を待たない、翌日 0:00）
+- D38: 仕上げの細則（空き時間は今日から、検索の範囲と並び、書き出しは fetch だけ・JSON と ICS の形、バックアップと掃除の時刻、同期の gzip、これからの一覧は 140 日まで、ビルドの検査）
 - D37: 一言入力の細則（found と reason、先に選んだ日を残す、回数制限はルール解析、AI の出力の検証、公式 SDK・再試行なし、例の作り方、時間帯、重なりの警告、ai:eval）
 
 ## 後で足すテスト
-- 非公開の漏えい（まだない経路）: 書き出し（JSON・ICS。Phase 7）、検索（Phase 7。端末内の DB を検索する）。一言入力の重なりの警告は Phase 5 で足した（web phase5.test.ts）
-- T7 のビルド成果物の検査（sk-ant）に「X-Dev-Login」「ito.devLogin」「表示する状態」「__gallery」を足す（Phase 7）
-- これからの一覧の範囲を、見ている日の前後 8 週に削る（今は広げるだけ。§19 の性能の確認と合わせて Phase 7）
+- （Phase 7 ですべて足した）書き出し（JSON・ICS）と検索の非公開の漏えい（export.test.ts・phase7.test.ts）、T7 のビルド成果物の検査（scripts/check-dist.mjs）、これからの一覧の範囲（MAX_FLOW_DAYS と E2E）
 
 ## 要確認（持ち主がやること・確かめてほしいこと。根拠の出力も）
 - **通知の実機での確認**（iPhone でホーム画面に追加 → 通知オン → テスト通知 → 5 分後の予定の通知 → 1 日アプリを開かなくても翌朝のまとめ）。実機と本物の Push サービス（Apple）が要るので、持ち主の作業。
@@ -149,6 +157,8 @@
 - pnpm は PC 全体には入れず、corepack の shim をリポジトリ内の `.tools/bin`（.gitignore 済み）に置いて使っている（`corepack enable --install-directory .tools/bin pnpm`）。版は package.json の packageManager（pnpm@10.34.5）
 
 ## 既知の問題
+- `pnpm audit` で drizzle-kit（マイグレーションを作る開発用の道具）の中の esbuild（<=0.24.2 の開発サーバーの問題。GHSA-67mh-4wv8-2f99）が moderate 1 件。開発用の道具で、バンドル・Docker のイメージに入らず、esbuild を開発サーバーとして動かさないので受け入れる（drizzle-kit の更新で解消する）
+- テストを直したもの（Phase 7）: server static.test.ts の /api/export へのページ遷移を 404 から 403 に（経路がなかったときの状態コードを期待していた。確かめたいのは index.html にならないことで、それは変えていない）
 - E2E のコンソールエラー 0 件の確認では、ネットワークを切るテスト（オフライン・API 遮断・競合・ログアウトのあとのオフライン）と /api/export への遷移のテストに限り、Chromium が自分で出す「Failed to load resource」のうち、意図して失敗させた /api/ への要求のもの（net::ERR_INTERNET_DISCONNECTED / net::ERR_FAILED / status of 409 / /api/export の 4xx）だけを許している（URL で絞る。アプリシェル・アイコンなどの失敗やアプリのエラーは許さない。e2e/fixtures.ts の allowedConsoleErrors）
 - E2E を `--repeat-each` で繰り返すと、同じサーバーに同じ件名の予定が残るため 2 回目から件名の重複で落ちる（1 回目はすべて通る。E2E のサーバーは実行のたびに空の DB で始まる。retries は 0）
 - vite-plugin-pwa 1.3 が Vite 8 で「inlineDynamicImports option is deprecated」の警告を出す（ビルドは成功する。プラグイン側の問題）

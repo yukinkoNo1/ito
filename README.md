@@ -47,7 +47,8 @@ docker compose up -d --build
 - ts が tailnet に参加したら `deploy/.env` の `TS_AUTHKEY` は空にしてよい
 - 設置後の確認: tailnet の別の端末から `curl -m 3 http://ito.<tailnet>.ts.net:8787/healthz` が**失敗する**こと、`https://ito.<tailnet>.ts.net/healthz` が 200 になること
 - 更新: `git pull && docker compose up -d --build`（マイグレーションは起動時に自動で適用される）
-- バックアップ: `/data/backups` を restic の対象にする。復元はコンテナを止め、`/data` の `ito.db-wal` と `ito.db-shm` を消してから `ito.db` を差し替えて起動する
+- バックアップ: アプリが毎日 3:30（止まっていた日は動き出したとき）に `/data/backups/ito-YYYYMMDD.db` を作り、`BACKUP_KEEP`（既定 14）世代を残す（ログの `backup` の行にファイル名）。掃除（ゴミ箱 30 日・履歴 1 年など）は毎日 4:00。`/data/backups` を restic の対象にする。復元はコンテナを止め、`/data` の `ito.db-wal` と `ito.db-shm` を消してから、バックアップの `.db` を `ito.db` として置いて起動する
+- 家族それぞれの書き出し: 設定の「予定を書き出す」→ JSON（バックアップ用）か ICS（カレンダーに取り込む）。ほかの家族の内緒の予定は入らない。iPhone では共有シートで「ファイル」やカレンダーに渡す
 - 監視: `docker compose ps` のヘルスと、ログの `level>=40`（warn 以上）
 
 ### いえボードとつなぐ（連携キー。SPEC §13.1・§20）

@@ -12,6 +12,7 @@ import { useData, useMe, useMembers } from '../../app/data-context';
 import { sendOnline } from '../../app/online-actions';
 import { useToast } from '../../app/toast';
 import { apiRequest } from '../../data/api';
+import { downloadExport, EXPORT_MESSAGES } from '../../pwa/export';
 import { detectPlatform, isStandalone } from '../../pwa/install';
 import { logoutThisDevice } from '../../pwa/logout';
 import {
@@ -160,7 +161,13 @@ export function SettingsContainer() {
           if (result === 'enabled') void loadDevices();
         });
       }}
-      onExport={() => {}}
+      onExport={(format) => {
+        void downloadExport(format).then((result) => {
+          const message = EXPORT_MESSAGES[result];
+          if (message)
+            showToast({ kind: result === 'saved' ? 'info' : 'error', message, actionLabel: null });
+        });
+      }}
       onLogoutDevice={() => {
         void logoutThisDevice(db).then(() => {
           window.location.assign('/welcome');

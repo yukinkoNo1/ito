@@ -88,3 +88,32 @@ export function problemCode(body: unknown): string | null {
   }
   return null;
 }
+
+/**
+ * ファイルとして受け取る GET（書き出し。§13 の /api/export は fetch で取って Blob にする。ページ遷移で開かない）。
+ * 通信できなければ NetworkError
+ */
+export async function apiFile(
+  path: string,
+  opts: { fetcher?: Fetcher } = {},
+): Promise<{ status: number; blob: Blob; headers: Headers }> {
+  const headers: Record<string, string> = { 'X-Ito-Client': PROTOCOL_VERSION };
+  if (import.meta.env.DEV || __ITO_E2E__) {
+    const dev = devLogin();
+    if (dev) headers['X-Dev-Login'] = dev;
+  }
+  const fetcher = opts.fetcher ?? ((i, init) => fetch(i, init));
+  let res: Response;
+  try {
+    res = await fetcher(path, {
+      method: 'GET',
+      headers,
+      credentials: 'same-origin',
+      cache: 'no-store',
+      redirect: 'error',
+    });
+  } catch {
+    throw new NetworkError();
+  }
+  return { status: res.status, blob: await res.blob(), headers: res.headers };
+}
