@@ -47,6 +47,39 @@ export type FlowScreenData = Omit<
 /** これからの画面は表示範囲の前後 8 週だけ描画し、端で追加読み込み（§19） */
 export const FLOW_WINDOW_DAYS = 56;
 
+/** 端で足す日数と、足せる範囲（今日から過去 1 年・未来 3 年） */
+export const FLOW_EXTEND_DAYS = 28;
+export const FLOW_PAST_LIMIT = -366;
+export const FLOW_FUTURE_LIMIT = 366 * 3;
+/**
+ * 一度に描く範囲の上限（§19「表示範囲の前後 8 週だけ描画し、端で追加読み込み」。§24 D38）。
+ * 端までスクロールして足したら反対側の端を削る（見ている位置は UpcomingScreen が行の key で保つ）
+ */
+export const MAX_FLOW_DAYS = FLOW_WINDOW_DAYS * 2 + FLOW_EXTEND_DAYS;
+
+/**
+ * これからの一覧の範囲を端で広げる。反対側を削るのは、端までスクロールしたとき（byScroll）だけ
+ * （一覧が画面に収まっているときのタップで広げるときは削らない。今日の日が消えないように）
+ */
+export function extendFlowRange(
+  range: { from: DateISO; to: DateISO },
+  side: 'start' | 'end',
+  byScroll: boolean,
+  today: DateISO,
+): { from: DateISO; to: DateISO } {
+  const min = addDays(today, FLOW_PAST_LIMIT);
+  const max = addDays(today, FLOW_FUTURE_LIMIT);
+  const clamp = (d: DateISO) => (d < min ? min : d > max ? max : d);
+  if (side === 'end') {
+    const to = clamp(addDays(range.to, FLOW_EXTEND_DAYS));
+    const trimmed = addDays(to, -MAX_FLOW_DAYS);
+    return { from: byScroll && trimmed > range.from ? trimmed : range.from, to };
+  }
+  const from = clamp(addDays(range.from, -FLOW_EXTEND_DAYS));
+  const trimmed = addDays(from, MAX_FLOW_DAYS);
+  return { from, to: byScroll && trimmed < range.to ? trimmed : range.to };
+}
+
 export function buildFlowScreen(input: {
   events: LocalEvent[];
   ctx: VmContext;
@@ -62,8 +95,20 @@ export function buildFlowScreen(input: {
   const { events, ctx, filter } = input;
   // 週の帯・日付で移動した日は、予定がなくても日の見出しを出して、そこへ合わせる
   const items = buildFlowItems(events, input.from, input.to, ctx, filter, [input.selectedDate]);
+  // 「新しい予定 n件」は、スクロールで描く範囲が変わっても同じ数になるよう、いつも最初の範囲（今日の前後）で数える
+  const freshItems =
+    input.from === addDays(ctx.today, -1) && input.to === addDays(ctx.today, FLOW_WINDOW_DAYS)
+      ? items
+      : buildFlowItems(
+          events,
+          addDays(ctx.today, -1),
+          addDays(ctx.today, FLOW_WINDOW_DAYS),
+          ctx,
+          filter,
+          [],
+        );
   let freshCount = 0;
-  for (const item of items) {
+  for (const item of freshItems) {
     if (item.kind !== 'day') continue;
     for (const a of item.day.allDay)
       if (a.occ.fresh && (a.span === 'single' || a.span === 'start')) freshCount++;

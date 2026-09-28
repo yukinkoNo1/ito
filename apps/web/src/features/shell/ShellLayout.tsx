@@ -1,8 +1,9 @@
-import { useEffect } from 'react';
+import { lazy, Suspense, useEffect } from 'react';
 import { Outlet, useLocation, useNavigate } from 'react-router';
 import { useData, useSyncState } from '../../app/data-context';
 import { useSyncVM } from '../../app/hooks';
 import { useNav } from '../../app/nav';
+import { prefetchScreens } from '../../app/screens';
 import { useToast } from '../../app/toast';
 import { useUpdate } from '../../app/update';
 import { useViewDate } from '../../app/view-date';
@@ -10,8 +11,19 @@ import { checkForUpdate } from '../../pwa/register';
 import AppShell from '../../ui/primitives/AppShell';
 import type { TabId, ToastVM } from '../../ui/types';
 import { COMPOSER_HINT } from '../../viewmodels/screens';
-import { ComposerContainer } from '../composer/ComposerContainer';
-import { EventDetailContainer } from '../event/EventDetailContainer';
+
+/**
+ * 詳細（S-04）と書く画面（S-05。一言のルール解析を含む）は、開いたときに読む（§19 の初回の JS 200KB 以内。§24 D38）。
+ * SW がプリキャッシュするので、読み込みは端末の中で終わる
+ */
+const loadDetail = () => import('../event/EventDetailContainer');
+const loadComposer = () => import('../composer/ComposerContainer');
+const EventDetailContainer = lazy(() =>
+  loadDetail().then((m) => ({ default: m.EventDetailContainer })),
+);
+const ComposerContainer = lazy(() =>
+  loadComposer().then((m) => ({ default: m.ComposerContainer })),
+);
 
 const TAB_PATH: Record<TabId, string> = {
   flow: '/',
@@ -39,6 +51,15 @@ export function ShellLayout() {
   const nav = useNav();
   const { viewDate } = useViewDate();
   const outdated = syncState.block?.kind === 'client_outdated';
+
+  // 詳細と書く画面は、最初の表示のあとすぐ読んでおく（最初の表示の JS には入れず、SW がまだ入っていないうちに
+  // オフラインになっても開けるように）。ほかの画面は手が空いたときに読む（routes の lazy と同じかたまり）
+  useEffect(() => {
+    void loadDetail().catch(() => {});
+    void loadComposer().catch(() => {});
+    const idle = window.setTimeout(() => void prefetchScreens().catch(() => {}), 2000);
+    return () => window.clearTimeout(idle);
+  }, []);
 
   // 426 client_outdated: 新しい SW を確かめる（待機中の SW ができれば「更新」が出る。§12）
   useEffect(() => {
@@ -81,11 +102,11 @@ export function ShellLayout() {
       onToastDismiss={toast.dismiss}
       overlay={
         sheetOpen ? (
-          <>
+          <Suspense fallback={null}>
             {/* 書く画面は詳細の上に重ねる（詳細の「編集」「複製」から開く）ので、あとに置く */}
             <EventDetailContainer />
             <ComposerContainer />
-          </>
+          </Suspense>
         ) : null
       }
       screen={current === 'month' ? 'month-screen' : undefined}

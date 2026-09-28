@@ -36,6 +36,28 @@ describe('静的配信（SPEC §20）', () => {
     }
   });
 
+  it('JS・HTML は Accept-Encoding があれば gzip で送る（小さいものと /api/* はそのまま）', async () => {
+    writeFileSync(path.join(root, 'assets', 'big-abc123.js'), `console.log(${'1+'.repeat(2000)}1)`);
+    const res = await send(ctx, 'GET', '/assets/big-abc123.js', {
+      headers: { 'accept-encoding': 'gzip, br' },
+    });
+    expect(res.status).toBe(200);
+    expect(res.headers.get('content-encoding')).toBe('gzip');
+    expect(res.headers.get('cache-control')).toBe('public, max-age=31536000, immutable');
+    const text = await new Response(
+      (res.body as ReadableStream).pipeThrough(new DecompressionStream('gzip')),
+    ).text();
+    expect(text.startsWith('console.log(1+1+')).toBe(true);
+    // 1KB 未満は圧縮しない
+    const small = await send(ctx, 'GET', '/assets/index-abc123.js', {
+      headers: { 'accept-encoding': 'gzip' },
+    });
+    expect(small.headers.get('content-encoding')).toBeNull();
+    // /api/*（同期のほか）は圧縮しない
+    const api = await send(ctx, 'GET', '/api/me', { headers: { 'accept-encoding': 'gzip' } });
+    expect(api.headers.get('content-encoding')).toBeNull();
+  });
+
   it('ハッシュ付きの資産は長期キャッシュ、sw.js は no-cache', async () => {
     const asset = await send(ctx, 'GET', '/assets/index-abc123.js');
     expect(asset.headers.get('cache-control')).toBe('public, max-age=31536000, immutable');

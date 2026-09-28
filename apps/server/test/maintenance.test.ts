@@ -255,6 +255,22 @@ describe('バックアップ（毎日 3:30）', () => {
     }
   });
 
+  it('VACUUM INTO が途中で失敗したら、書きかけ（.tmp）を残さずに失敗を返す', () => {
+    const dir = tempDir();
+    dirs.push(dir);
+    // ディスクがいっぱいなどで、書きかけのファイルを作ったあとに失敗する DB
+    const failing = {
+      run: () => {
+        writeFileSync(path.join(dir, 'ito-20260927.db.tmp'), 'partial');
+        throw new Error('SQLITE_FULL');
+      },
+    } as unknown as Parameters<typeof runBackup>[0];
+    expect(() => runBackup(failing, dir, 14, fromJst('2026-09-27', '03:30'))).toThrow(
+      'SQLITE_FULL',
+    );
+    expect(readdirSync(dir)).toEqual([]);
+  });
+
   it('14 世代を残し、古いものから消す（16 日続けて作る）', () => {
     const dir = tempDir();
     dirs.push(dir);
@@ -297,8 +313,36 @@ describe('バックアップ（毎日 3:30）', () => {
     expect(next.cleanup).toBeDefined();
     await s.stop();
     expect(existsSync(path.join(dir, 'ito-20260928.db'))).toBe(true);
-    // ログにはファイル名と件数だけ
-    expect(ctx.logs.text).toContain('"msg":"backup"');
-    expect(ctx.logs.text).toContain('"msg":"cleanup"');
+    // ログにはファイル名と件数だけ（パス・予定名を出さない）
+    const lines = ctx.logs.lines
+      .flatMap((l) => l.split(String.fromCharCode(10)))
+      .filter(Boolean)
+      .map((l) => JSON.parse(l) as Record<string, unknown>);
+    const strip = ({
+      level: _l,
+      time: _t,
+      pid: _p,
+      hostname: _h,
+      ...rest
+    }: Record<string, unknown>) => rest;
+    const backups = lines.filter((l) => l.msg === 'backup').map(strip);
+    expect(backups).toEqual([
+      { file: 'ito-20260928.db', removed: 0, msg: 'backup' },
+      { file: 'ito-20260929.db', removed: 0, msg: 'backup' },
+    ]);
+    const cleanups = lines.filter((l) => l.msg === 'cleanup').map(strip);
+    expect(Object.keys(cleanups[0] ?? {}).sort()).toEqual(
+      [
+        'activity',
+        'aiUsage',
+        'changes',
+        'idempotency',
+        'msg',
+        'notificationLog',
+        'pendingNotices',
+        'trash',
+      ].sort(),
+    );
+    expect(ctx.logs.text).not.toContain(dir);
   });
 });

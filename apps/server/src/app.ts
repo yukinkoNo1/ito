@@ -131,7 +131,16 @@ export function createApp(deps: AppDeps): App {
   registerParseRoutes(app, { ...deps, ai: deps.ai ?? null });
   registerExportRoutes(app, deps);
 
-  if (deps.staticDir) app.use('*', staticFiles(deps.staticDir));
+  if (deps.staticDir) {
+    // JS・CSS・HTML・manifest は gzip で送る（§19 の初回の JS は gzip の大きさで決めている。§24 D38）
+    const gzip = compress({ encoding: 'gzip' });
+    app.use('*', (c, next) =>
+      c.req.path === '/api' || c.req.path.startsWith('/api/') || c.req.path === '/healthz'
+        ? next()
+        : gzip(c, next),
+    );
+    app.use('*', staticFiles(deps.staticDir));
+  }
 
   return app;
 }

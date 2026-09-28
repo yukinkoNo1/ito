@@ -34,6 +34,13 @@ pnpm dev                     # http://localhost:5173 （API は :8787。開発�
 3. 認証キーを作る: タグ `tag:ito`、再利用なし、エフェメラルなし、事前承認あり
 4. 家族を tailnet に招待する
 5. いえボードを動かす端末はタグ `tag:ieboard` で参加させる
+6. ホスト名（`ito`）と tailnet 名には、家族の名前など個人が分かる語を使わない（`*.ts.net` の証明書のホスト名は、だれでも見られる証明書の透明性ログに載る。SPEC §18 T12）
+
+**設置したあとの確かめ方（アクセス制御。SPEC §18 T1・T2・T16）**
+- 家族のスマホ（`group:family`）から `https://ito.<tailnet>.ts.net/healthz` が 200、tailnet の別の端末から `http://ito.<tailnet>.ts.net:8787/healthz` は**つながらない**（`curl -m 3` が失敗する）
+- `tag:ieboard` の端末から `https://ito.<tailnet>.ts.net/api/feed/display` は連携キーを付けたときだけ 200、付けなければ 401。`https://ito.<tailnet>.ts.net/api/me` は 401（タグの端末には ID ヘッダが付かない）
+- `tag:ieboard` の端末から、家族のスマホ・PC（`autogroup:member`）へ通信を始められない（例: `tailscale ping <家族の端末>` や `curl -m 3 http://<家族の端末>:<開いているポート>` が失敗する）
+- 管理画面の「Access controls」の「Preview rules」で、`tag:ito` への 443 以外が「Denied」になっている
 
 ### サーバー（Ubuntu ＋ Docker Compose）
 ```sh

@@ -57,31 +57,30 @@ export function searchOccurrences(
   const from = fromJst(addDays(ctx.today, -SEARCH_RANGE_DAYS));
   const to = fromJst(addDays(ctx.today, SEARCH_RANGE_DAYS + 1));
   const todayMs = fromJst(ctx.today);
-  // シリーズごとに 1 回（これからの最初の回、なければ最後の回）
-  const bySeries = new Map<string, Occurrence<LocalEvent>>();
+  // これからの回か（終わりは含まないので、昨日の終日・きのう 24:00 に終わった予定は過ぎた回）
+  const upcoming = (o: Occurrence<LocalEvent>) =>
+    o.endMs !== null ? o.endMs > todayMs : o.startMs >= todayMs;
+  // シリーズごとに 1 回（これからの最初の回、なければ最後の回）。人の絞り込みは回ごとに先に当てる
+  // （「この回だけ」別の人にした回があっても、シリーズのほかの回で出す）
+  const bySeries = new Map<
+    string,
+    { o: Occurrence<LocalEvent>; vm: ReturnType<typeof toOccurrenceVM> }
+  >();
   for (const o of expandAll(visible, from, to)) {
     if (!matches(o.event, terms)) continue;
-    const upcoming = (o.endMs ?? o.startMs) >= todayMs;
+    const vm = toOccurrenceVM(o, ctx);
+    if (!matchesFilter(vm, filter)) continue;
     const current = bySeries.get(o.seriesId);
-    if (!current) {
-      bySeries.set(o.seriesId, o);
-      continue;
-    }
-    const currentUpcoming = (current.endMs ?? current.startMs) >= todayMs;
     // expandAll は開始の順なので、これからの回は最初のもの、過ぎた回は最後のものを残す
-    if (!currentUpcoming && (upcoming || o.startMs > current.startMs)) bySeries.set(o.seriesId, o);
+    if (!current || (!upcoming(current.o) && (upcoming(o) || o.startMs > current.o.startMs))) {
+      bySeries.set(o.seriesId, { o, vm });
+    }
   }
-  const vms = [...bySeries.values()]
-    .map((o) => ({ o, vm: toOccurrenceVM(o, ctx) }))
-    .filter(({ vm }) => matchesFilter(vm, filter));
-  const upcoming = vms
-    .filter(({ o }) => (o.endMs ?? o.startMs) >= todayMs)
-    .sort((a, b) => a.o.startMs - b.o.startMs);
-  const past = vms
-    .filter(({ o }) => (o.endMs ?? o.startMs) < todayMs)
-    .sort((a, b) => b.o.startMs - a.o.startMs);
+  const vms = [...bySeries.values()];
+  const soon = vms.filter(({ o }) => upcoming(o)).sort((x, y) => x.o.startMs - y.o.startMs);
+  const past = vms.filter(({ o }) => !upcoming(o)).sort((x, y) => y.o.startMs - x.o.startMs);
   const groups: SearchGroupVM[] = [];
-  for (const { vm } of [...upcoming, ...past].slice(0, SEARCH_MAX_RESULTS)) {
+  for (const { vm } of [...soon, ...past].slice(0, SEARCH_MAX_RESULTS)) {
     const label = dateLabel(vm.startDate);
     const last = groups[groups.length - 1];
     if (last && last.dateLabel === label) last.items.push(vm);

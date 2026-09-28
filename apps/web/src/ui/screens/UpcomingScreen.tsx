@@ -251,7 +251,8 @@ export default function UpcomingScreen(props: FlowScreenProps) {
     const markUser = () => {
       userScrolled.current = true;
       // 一覧が画面に収まってスクロールできないときも、触ったら続きを読む
-      if (root.scrollHeight - root.clientHeight < EDGE_PX) reachEnd.current();
+      // （スクロールではないので、反対側の端は削らない）
+      if (root.scrollHeight - root.clientHeight < EDGE_PX) reachEnd.current(false);
     };
     const captureAnchor = () => {
       if (pendingAnchor.current !== null) return false;
@@ -271,9 +272,9 @@ export default function UpcomingScreen(props: FlowScreenProps) {
     };
     const onScroll = () => {
       if (!userScrolled.current) return;
-      if (root.scrollTop < EDGE_PX && captureAnchor()) reachStart.current();
+      if (root.scrollTop < EDGE_PX && captureAnchor()) reachStart.current(true);
       if (root.scrollHeight - root.scrollTop - root.clientHeight < EDGE_PX && captureAnchor())
-        reachEnd.current();
+        reachEnd.current(true);
     };
     const inputs = ['wheel', 'touchstart', 'keydown', 'pointerdown'] as const;
     for (const type of inputs) root.addEventListener(type, markUser, { passive: true });

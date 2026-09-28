@@ -111,10 +111,15 @@ export function runBackup(db: DbLike, dir: string, keep: number, nowMs: number):
   const file = backupFileName(todayJst(nowMs));
   const target = path.join(dir, file);
   const tmp = `${target}.tmp`;
-  // 同じ日にもう一度作るとき（手で呼んだときなど）は置き換える
-  db.run(sql`VACUUM INTO ${tmp}`);
-  rmSync(target, { force: true });
-  renameSync(tmp, target);
+  // 同じ日にもう一度作るとき（手で呼んだときなど）は置き換える（rename は同じ名前のファイルを置き換える）。
+  // 失敗したら書きかけを消す（ディスクがいっぱいのときに残すと、動いている DB の書き込みまで止まる）
+  try {
+    db.run(sql`VACUUM INTO ${tmp}`);
+    renameSync(tmp, target);
+  } catch (err) {
+    rmSync(tmp, { force: true });
+    throw err;
+  }
   const all = readdirSync(dir)
     .filter((name) => BACKUP_RE.test(name))
     .sort()

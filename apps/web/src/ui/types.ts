@@ -366,8 +366,8 @@ export interface FlowScreenProps {
   onNextWeek: () => void;
   onOpenOccurrence: (key: string) => void;
   onComposeOnDate: (date: DateISO) => void;
-  onReachStart: () => void; // 過去方向の追加読み込み
-  onReachEnd: () => void; // 未来方向の追加読み込み
+  onReachStart: (byScroll?: boolean) => void; // 過去方向の追加読み込み（byScroll: 端までスクロールした。反対側の端を削ってよい。§24 D38）
+  onReachEnd: (byScroll?: boolean) => void; // 未来方向の追加読み込み（同上）
   onJumpToday: () => void;
   onNoticeAction: () => void;
   onNoticeDismiss: () => void;

@@ -1,3 +1,4 @@
+import './zod-config';
 import { z } from 'zod';
 import { graphemeLength, normalizeText } from './text';
 

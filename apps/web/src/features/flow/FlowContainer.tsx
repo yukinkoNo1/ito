@@ -1,4 +1,4 @@
-import { addDays, type DateISO, maxDate, minDate } from '@ito/core';
+import { addDays, type DateISO } from '@ito/core';
 import { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router';
 import { useEvents, useMe, useMeta } from '../../app/data-context';
@@ -22,17 +22,14 @@ import {
   UNKNOWN_KEY,
 } from '../../pwa/push';
 import UpcomingScreen from '../../ui/screens/UpcomingScreen';
-import { buildFlowScreen, FLOW_WINDOW_DAYS, shiftWeek } from '../../viewmodels/screens';
-
-/** 端で足す日数と、足せる範囲（今日から過去 1 年・未来 3 年） */
-const EXTEND_DAYS = 28;
-/**
- * 一度に描く範囲の上限（§19「表示範囲の前後 8 週だけ描画し、端で追加読み込み」）。足したら反対側の端を削る
- * （見ている位置は UpcomingScreen が行の key で保つ）
- */
-export const MAX_FLOW_DAYS = FLOW_WINDOW_DAYS * 2 + EXTEND_DAYS;
-const PAST_LIMIT = -366;
-const FUTURE_LIMIT = 366 * 3;
+import {
+  buildFlowScreen,
+  extendFlowRange,
+  FLOW_FUTURE_LIMIT,
+  FLOW_PAST_LIMIT,
+  FLOW_WINDOW_DAYS,
+  shiftWeek,
+} from '../../viewmodels/screens';
 
 /** S-01 これから */
 export function FlowContainer() {
@@ -48,6 +45,8 @@ export function FlowContainer() {
   // いま見ている日（null = 今日）。週の帯・日付で移動すると変わる
   const [selected, setSelected] = useState<DateISO | null>(null);
   const [range, setRange] = useState<{ from: DateISO; to: DateISO } | null>(null);
+  // 範囲を置き換えたあとに合わせる行（描き直したあとでないと要素がない）
+  const [pendingScroll, setPendingScroll] = useState<'fresh' | DateISO | null>(null);
   const [notice, setNotice] = useState<NoticeKind | null>(homeNoticeKind);
   const [publicKey, setPublicKey] = useState<PublicKeyState>(UNKNOWN_KEY);
   const toast = useToast();
@@ -93,18 +92,30 @@ export function FlowContainer() {
           : notice === 'notifications'
             ? NOTIFICATIONS_NOTICE
             : null,
-      showBackToToday: selectedDate !== ctx.today,
+      // 今日から離れた（移動した・今日の日が描く範囲から外れた）ら「今日に戻る」
+      showBackToToday: selectedDate !== ctx.today || ctx.today < from || ctx.today >= to,
     });
     // sync は一覧の組み立てに使わない（60 秒ごとの同期で一覧を作り直さない）
   }, [ctx, events, filter, from, to, selectedDate, weekStart, unread, notice]);
+
+  // 範囲を置き換えて描き直したあとで、その行へ合わせる
+  useEffect(() => {
+    if (!pendingScroll || !data) return;
+    const el =
+      pendingScroll === 'fresh'
+        ? document.querySelector('[data-fresh="true"]')
+        : document.getElementById(`date-${pendingScroll}`);
+    el?.scrollIntoView({ block: pendingScroll === 'fresh' ? 'center' : 'start' });
+    setPendingScroll(null);
+  }, [pendingScroll, data]);
 
   if (!data || !today || !selectedDate || !from || !to) {
     return <p className="detail-meta">読み込み中…（家のサーバーにつながると表示されます）</p>;
   }
 
   const clamp = (d: DateISO) => {
-    const min = addDays(today, PAST_LIMIT);
-    const max = addDays(today, FUTURE_LIMIT);
+    const min = addDays(today, FLOW_PAST_LIMIT);
+    const max = addDays(today, FLOW_FUTURE_LIMIT);
     return d < min ? min : d > max ? max : d;
   };
 
@@ -133,15 +144,21 @@ export function FlowContainer() {
       sync={sync}
       onComposeOnDate={(date) => nav.openComposer({ date })}
       onJumpToDate={jumpTo}
-      onJumpToFresh={() =>
-        document.querySelector('[data-fresh="true"]')?.scrollIntoView({ block: 'center' })
-      }
+      onJumpToFresh={() => {
+        const el = document.querySelector('[data-fresh="true"]');
+        if (el) {
+          el.scrollIntoView({ block: 'center' });
+          return;
+        }
+        // 描く範囲から外れていたら、今日のまわりに戻してから
+        setSelected(null);
+        setRange(null);
+        setPendingScroll('fresh');
+      }}
       onJumpToday={() => {
         setSelected(null);
         setRange(null);
-        requestAnimationFrame(() =>
-          document.getElementById(`date-${today}`)?.scrollIntoView({ block: 'start' }),
-        );
+        setPendingScroll(today);
       }}
       onNextWeek={() => jumpTo(shiftWeek(selectedDate, 1))}
       onNoticeAction={() => {
@@ -177,14 +194,12 @@ export function FlowContainer() {
       onOpenSearch={() => navigate('/search')}
       onPickExample={(text) => nav.openComposer({ text, date: selectedDate })}
       onPrevWeek={() => jumpTo(shiftWeek(selectedDate, -1))}
-      onReachEnd={() => {
-        const next = clamp(addDays(to, EXTEND_DAYS));
-        setRange({ from: maxDate(from, addDays(next, -MAX_FLOW_DAYS)), to: next });
-      }}
-      onReachStart={() => {
-        const next = clamp(addDays(from, -EXTEND_DAYS));
-        setRange({ from: next, to: minDate(to, addDays(next, MAX_FLOW_DAYS)) });
-      }}
+      onReachEnd={(byScroll) =>
+        setRange(extendFlowRange({ from, to }, 'end', byScroll === true, today))
+      }
+      onReachStart={(byScroll) =>
+        setRange(extendFlowRange({ from, to }, 'start', byScroll === true, today))
+      }
       onSetFilter={setFilter}
     />
   );

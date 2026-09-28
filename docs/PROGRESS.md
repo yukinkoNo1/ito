@@ -1,5 +1,5 @@
 # 進み具合
-今: Phase 7（仕上げ） / 次にやること: 退避した Phase 7 の作業（git stash「phase7-wip」: 空き時間・検索・書き出し・掃除とバックアップ・同期の gzip・性能のテスト）を戻す → E2E（§6.2 の空き→書く、検索、書き出し、60fps）・T7 の成果物の検査・security-map → レビュー → phase-7 → 総点検 → 最終確認
+今: 総点検 / 次にやること: 攻撃者の視点で §14・§18 に照らして洗い出す（サブエージェント）→ 疑わしい点ごとに失敗する再現テスト → 直す → docs/security-review.md → audit → 最終確認（RUNBOOK の最終確認のコマンドと最終報告）
 
 ## ステップ
 | ステップ | 状態（未着手・作業中・完了） | タグ | メモ |
@@ -11,7 +11,7 @@
 | Phase 3 繰り返し | 完了 | phase-3 | レビューの指摘（件名だけ直してもシリーズが動く、C-04 の件数とサーバーの食い違い、リセットした例外の復活、毎月の規則のずれ、回が出ない規則、pnpm dev が rrule の読み込みで起動しない、回の送信待ちの 409 ほか）を直した（§24 D34） |
 | Phase 4 通知 | 完了 | phase-4 | レビューの指摘（止めた端末の再購読、まとめ待ちの件名の漏れ、pnpm dev のログアウト、renotify、終日⇔時刻ありの通知 ほか）を直し、修正もレビューして直した（§24 D36） |
 | Phase 5 一言入力 | 完了 | phase-5 | 退避した作業を戻し、Anthropic の呼び出しを公式 SDK にした。レビューの 21 件（high 1・medium 11・low 9）を直した（§24 D37） |
-| Phase 7 仕上げ | 未着手 | phase-7 | |
+| Phase 7 仕上げ | 完了 | phase-7 | 空き時間・検索・書き出し・バックアップと掃除・同期と静的の gzip・これからの一覧の範囲・ビルドの検査・性能・security-map。レビューの 16 件を直した（§24 D38） |
 | 総点検 | 未着手 | audit | |
 | 最終確認 | 未着手 | — | |
 
@@ -75,7 +75,7 @@
 | Phase 6 | ui/tokens.css の色が §22 と同じ | web 単体 phase6.test.ts「ui/tokens.css の色は §22 の値と同じ」（変数ごとに比べる） | OK |
 | Phase 6 | 入力欄の文字 16px 以上・タップ領域 44px 以上 | E2E「入力欄の文字は 16px 以上、タップ領域は 44px 以上」（本番の全画面・シート）、ギャラリーの全状態（ライト・ダーク） | OK |
 | Phase 6 | icon.svg から PWA のアイコン | `node scripts/gen-icons.mjs`（@resvg/resvg-js）→ public/icons、E2E「インストールできる」 | OK |
-| Phase 6 | ギャラリー・見本・開発用のログインが本番のビルドに入らない | `pnpm build` のあと apps/web/dist の JS を「表示する状態」「__gallery」「X-Dev-Login」「ito.devLogin」「2030-09-29」で検索 → 0 件 | OK（JS は gzip で 184KB。§19 の 200KB 以内） |
+| Phase 6 | ギャラリー・見本・開発用のログインが本番のビルドに入らない | `pnpm build` のあと apps/web/dist の JS を「表示する状態」「__gallery」「X-Dev-Login」「ito.devLogin」「2030-09-29」で検索 → 0 件 | OK（Phase 6 のとき JS は gzip で 184KB。Phase 7 で 1 本のままだと 218KB になったので、開いたときに読む画面を分け、初回表示を 197KB にした。`scripts/check-dist.mjs` がいつも測る） |
 | Phase 3 | §21 の繰り返しのテスト一式（第2・第4水曜、月末、2/29 の毎年、COUNT/UNTIL、例外・取り消し、「これ以降」の分割） | core test/recurrence.test.ts（展開・説明文・UI の形・分割と差分・expand の例外と取り消し）、server test/recurrence.test.ts（scope ごとの PATCH・DELETE） | OK |
 | Phase 3 | PWA とサーバーで同じ展開結果（同じデータで 3 通り） | core「3 通りの展開で比べるデータ（手で確かめた回と同じ）」、server「3 通りの展開（サーバーの API 経由）」、web phase3.test.ts「3 通りの展開（PWA の viewmodel 経由）」（packages/core/test/fixtures/recurring.ts を共有） | OK |
 | Phase 3 | COUNT のシリーズで「これ以降」→ 元は UNTIL だけ・新シリーズは残り回数 | server「COUNT のシリーズ: 元は UNTIL=前の回だけ、新シリーズは残りの回数…」、E2E phase3「繰り返しを書いて…」（COUNT=10 → 元は UNTIL、新は COUNT=9） | OK |
@@ -118,6 +118,8 @@
 | Phase 7 | T7 ビルド成果物の検査 | `pnpm build` の最後の `scripts/check-dist.mjs`（見つけたら EXIT=1。わざと入れた X-Dev-Login を見つけることを確かめた） | OK |
 | Phase 7 | §18 の表の対応表 | docs/security-map.md | OK |
 | Phase 7 | 依存の監査 | `pnpm audit --prod`（0 件）、`pnpm audit`（drizzle-kit の中の esbuild の moderate 1 件。開発用の道具でバンドルに入らない） | OK（既知の問題に記録） |
+| Phase 7 | レビューの指摘（§24 D38 (8)〜(11)） | web phase7.test.ts（検索の今日の境目・回ごとの絞り込み・他人の非公開・全員の予定、メモのリンク、これからの一覧の範囲）、server maintenance.test.ts（失敗したバックアップの書きかけ・ログの項目）、static.test.ts（gzip）、E2E phase7.spec.ts（今日に戻る・位置が飛ばない・メモのリンク）、`pnpm build` の check-dist（初回表示の JS 197KB） | OK |
+| Phase 7 | `pnpm check`・`pnpm build`・`pnpm test:e2e`・`docker compose build`・`up -d --wait` | `pnpm check`（Vitest 603 件）、`pnpm build`（check-dist: 初回表示の JS 198KB）、`pnpm test:e2e`（56 件）、`docker compose build`（Docker の中でも check-dist）・`up -d --wait`・`exec app node dist/cli.js feed-token list`・`down`、Docker の中でバックアップと掃除が動く（/data/backups/ito-20260928.db、uid 10001） | OK（すべて EXIT=0） |
 | Phase 6 | `pnpm check`・`pnpm test:e2e`・`pnpm build`・`docker compose build` | `pnpm check`（261 件）、`pnpm test:e2e`（39 件）、`pnpm build`、`docker compose build` | OK（すべて EXIT=0） |
 
 ## 決めたこと（SPEC §24 に書いたもの）
@@ -150,6 +152,15 @@
 - （Phase 7 ですべて足した）書き出し（JSON・ICS）と検索の非公開の漏えい（export.test.ts・phase7.test.ts）、T7 のビルド成果物の検査（scripts/check-dist.mjs）、これからの一覧の範囲（MAX_FLOW_DAYS と E2E）
 
 ## 要確認（持ち主がやること・確かめてほしいこと。根拠の出力も）
+- **本番の設置とアクセス制御（Tailscale のポリシー）の確かめ**（SPEC §18 T1・T2・T12・T16、§20）。管理画面と実際の tailnet が要るので持ち主の作業。
+  - 根拠: 手元では compose の設定（カーネルモード・network_mode・127.0.0.1・AllowFunnel: false）を `docker compose config`・`docker inspect` で確かめ、アプリ側の ID ヘッダ・CSRF・連携キーの検査はテスト（server audit-routes.test.ts ほか）で確かめた。ACL と、別の端末から :8787 に届かないことは実物がないと確かめられない
+  - 持ち主がやること: README「本番の立て方」のとおりに設置し、「設置したあとの確かめ方（アクセス制御）」の 4 項目を行う。ホスト名・tailnet 名に家族の名前を使わない
+- **ICS を iPhone のカレンダーに取り込む**（SPEC §23 Phase 7）。実機が要るので持ち主の作業。
+  - 根拠: 形は server export.test.ts（VTIMEZONE・終日の DTEND・RRULE の UTC の UNTIL・EXDATE・RECURRENCE-ID・75 オクテットの折り返し）と E2E phase7.spec.ts（iPhone の共有シートに VCALENDAR を渡す）で確かめた
+  - 持ち主がやること: 設定 →「予定を書き出す」→「ICS（カレンダーに取り込む）」→ 共有シートでカレンダーに追加し、繰り返し・終日・この回だけ変更した回が正しく出るかを見る
+- **一言入力の AI の評価（`pnpm ai:eval`）**（SPEC §16・§21、RUNBOOK Phase 5）。本物の ANTHROPIC_API_KEY が要るので持ち主の作業（こちらでは本物の鍵を使わない）。
+  - 根拠: `pnpm ai:eval` は鍵がなければ何もせずに終わる（「ANTHROPIC_API_KEY がないので実行しません」）。AI の呼び出しの形・失敗の扱いは server parse.test.ts で確かめた
+  - 持ち主がやること: `ANTHROPIC_API_KEY=sk-ant-... pnpm ai:eval`（PowerShell なら `$env:ANTHROPIC_API_KEY='...'; pnpm ai:eval`）で、§21 の表の 38 件と期待値の差を見る。本番の `app.env` に鍵を書けば一言入力が AI で解析される
 - **通知の実機での確認**（iPhone でホーム画面に追加 → 通知オン → テスト通知 → 5 分後の予定の通知 → 1 日アプリを開かなくても翌朝のまとめ）。実機と本物の Push サービス（Apple）が要るので、持ち主の作業。
   - 根拠: 手元の確認は偽の送信（server notify.test.ts）と、ブラウザの SW に DevTools で push を届ける E2E（phase4-push.spec.ts）まで。E2E のサーバーには VAPID の鍵を置いていない（本物の Push サービスに送らないため）。Docker では開発用の鍵で push が有効になることを確かめた（ログに push disabled が出ない）
   - 持ち主がやること: 本番の `app.env` に VAPID の鍵と `VAPID_SUBJECT`（mailto: か https:）を書き、README「通知（Web Push）」の「実機での確認の手順」を行う

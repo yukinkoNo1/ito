@@ -1,17 +1,9 @@
 import { lazy, type ReactNode, Suspense, useEffect, useState } from 'react';
 import { BrowserRouter, Navigate, Route, Routes, useLocation } from 'react-router';
-import { ActivityContainer } from '../features/activity/ActivityContainer';
 import { FlowContainer } from '../features/flow/FlowContainer';
-import { FreeContainer } from '../features/free/FreeContainer';
-import { InstallContainer } from '../features/install/InstallContainer';
 import { MonthContainer } from '../features/month/MonthContainer';
-import { OnboardingContainer } from '../features/onboarding/OnboardingContainer';
-import { SearchContainer } from '../features/search/SearchContainer';
-import { MembersContainer } from '../features/settings/MembersContainer';
-import { SettingsContainer } from '../features/settings/SettingsContainer';
 import { BareLayout } from '../features/shell/BareLayout';
 import { ShellLayout } from '../features/shell/ShellLayout';
-import { TrashContainer } from '../features/trash/TrashContainer';
 import { DEVICE_KEYS, readDevice } from '../pwa/device';
 import { registerServiceWorker } from '../pwa/register';
 import { readThemeSetting, setTheme } from './appearance';
@@ -19,6 +11,16 @@ import { DataProvider, useMe } from './data-context';
 import { FreshProvider } from './fresh';
 import { NavProvider, useNav } from './nav';
 import { PushSync } from './push-sync';
+import {
+  ActivityContainer,
+  FreeContainer,
+  InstallContainer,
+  MembersContainer,
+  OnboardingContainer,
+  SearchContainer,
+  SettingsContainer,
+  TrashContainer,
+} from './screens';
 import { ToastProvider } from './toast';
 import { UpdateContext } from './update';
 import { ViewDateProvider } from './view-date';
@@ -26,6 +28,11 @@ import { ViewDateProvider } from './view-date';
 /** 状態のギャラリー（開発と E2E 用のビルドにだけ入れる。本番のビルドでは分岐ごと消える。RUNBOOK 3.） */
 const Gallery =
   import.meta.env.DEV || __ITO_E2E__ ? lazy(() => import('../ui/gallery/Gallery')) : null;
+
+/** 読み込み中（開いたときに読む画面） */
+function Lazy({ children }: { children: ReactNode }) {
+  return <Suspense fallback={<p className="detail-meta">読み込み中…</p>}>{children}</Suspense>;
+}
 
 /** はじめての端末は S-11 へ（ホーム画面に追加ガイドは見られる） */
 function OnboardingGate({ children }: { children: ReactNode }) {
@@ -51,18 +58,74 @@ function AppRoutes() {
     <OnboardingGate>
       <Routes location={base}>
         <Route element={<BareLayout />}>
-          <Route path="/welcome" element={<OnboardingContainer />} />
-          <Route path="/install" element={<InstallContainer />} />
+          <Route
+            path="/welcome"
+            element={
+              <Lazy>
+                <OnboardingContainer />
+              </Lazy>
+            }
+          />
+          <Route
+            path="/install"
+            element={
+              <Lazy>
+                <InstallContainer />
+              </Lazy>
+            }
+          />
         </Route>
         <Route element={<ShellLayout />}>
           <Route path="/" element={<FlowContainer />} />
           <Route path="/month/:ym?" element={<MonthContainer />} />
-          <Route path="/free" element={<FreeContainer />} />
-          <Route path="/search" element={<SearchContainer />} />
-          <Route path="/settings" element={<SettingsContainer />} />
-          <Route path="/settings/members" element={<MembersContainer />} />
-          <Route path="/activity" element={<ActivityContainer />} />
-          <Route path="/trash" element={<TrashContainer />} />
+          <Route
+            path="/free"
+            element={
+              <Lazy>
+                <FreeContainer />
+              </Lazy>
+            }
+          />
+          <Route
+            path="/search"
+            element={
+              <Lazy>
+                <SearchContainer />
+              </Lazy>
+            }
+          />
+          <Route
+            path="/settings"
+            element={
+              <Lazy>
+                <SettingsContainer />
+              </Lazy>
+            }
+          />
+          <Route
+            path="/settings/members"
+            element={
+              <Lazy>
+                <MembersContainer />
+              </Lazy>
+            }
+          />
+          <Route
+            path="/activity"
+            element={
+              <Lazy>
+                <ActivityContainer />
+              </Lazy>
+            }
+          />
+          <Route
+            path="/trash"
+            element={
+              <Lazy>
+                <TrashContainer />
+              </Lazy>
+            }
+          />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Route>
       </Routes>

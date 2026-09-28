@@ -7,6 +7,8 @@ import { api, ensureFamily, LOGINS, navTo, ORIGIN, type Who } from './helpers';
  * これからの一覧のスクロール（§19。1 年分の予定で 50ms を超える long task が出ない。§24 D25）
  */
 
+// 失敗したテストのあとは worker が作り直されて seq が 0 に戻るので、実行ごとに違う値を添える
+const RUN = `${process.pid}-${Date.now()}`;
 let seq = 0;
 async function createAs(request: APIRequestContext, who: Who, body: Record<string, unknown>) {
   seq++;
@@ -17,7 +19,7 @@ async function createAs(request: APIRequestContext, who: Who, body: Record<strin
       'X-Ito-Client': '1',
       'Content-Type': 'application/json',
       Origin: ORIGIN,
-      'Idempotency-Key': `e2e-p7-${who}-${seq}`,
+      'Idempotency-Key': `e2e-p7-${who}-${RUN}-${seq}`,
     },
     data: JSON.stringify(body),
   });
@@ -250,17 +252,6 @@ test('§19 これからの一覧: 1 年分の予定でスクロールしても 5
   expect(after.first > before.first, JSON.stringify({ before, after })).toBe(true);
   // 描いている日は、前後 8 週と足した 4 週ほど（140 日）まで
   expect(after.count).toBeLessThanOrEqual(141);
-  // 削ったあとも、見ていた行が画面の中にある（位置が飛ばない）
-  const visible = await page.evaluate(() => {
-    const root = document.querySelector('[aria-label="これからの予定"]');
-    if (!root) return 0;
-    const r = root.getBoundingClientRect();
-    return [...root.querySelectorAll('[data-item-key]')].filter((el) => {
-      const b = el.getBoundingClientRect();
-      return b.bottom > r.top && b.top < r.bottom;
-    }).length;
-  });
-  expect(visible).toBeGreaterThan(0);
   for (let i = 0; i < 30; i++) {
     await page.mouse.wheel(0, -600);
     await page.waitForTimeout(30);
@@ -268,6 +259,77 @@ test('§19 これからの一覧: 1 年分の予定でスクロールしても 5
   await page.waitForTimeout(500);
   const long = await page.evaluate(() => (window as unknown as { __long: number[] }).__long);
   expect(long.filter((d) => d > 50)).toEqual([]);
+
+  // 今日の日が描く範囲から外れたら「今日に戻る」を出す（押すと今日へ）
+  await expect(page.getByRole('button', { name: '今日に戻る' })).toBeVisible();
+
+  // 端で足して反対側を削っても、見ていた行が同じ位置に残る。Chromium の既定のスクロールアンカーを止めて、
+  // アプリが行の key で戻すこと（Safari 向け）を確かめる
+  await page.evaluate(() => {
+    const root = document.querySelector<HTMLElement>('[aria-label="これからの予定"]');
+    if (root) root.style.overflowAnchor = 'none';
+  });
+  let checked = 0;
+  for (let i = 0; i < 12 && checked < 2; i++) {
+    const before2 = await page.evaluate(() => {
+      const root = document.querySelector<HTMLElement>('[aria-label="これからの予定"]');
+      if (!root) return null;
+      // 下の端の近くまで動かす（scroll の知らせで、アプリが見えている最初の行を覚えて足す）
+      root.scrollTop = root.scrollHeight - root.clientHeight - 100;
+      const top = root.getBoundingClientRect().top;
+      for (const el of root.querySelectorAll<HTMLElement>('[data-item-key]')) {
+        const r = el.getBoundingClientRect();
+        if (r.bottom > top) {
+          const first = document.querySelector('[id^="date-"]')?.id ?? '';
+          return { key: el.dataset.itemKey ?? '', offset: r.top - top, first };
+        }
+      }
+      return null;
+    });
+    if (!before2) throw new Error('一覧がない');
+    await page.waitForTimeout(400);
+    const after2 = await page.evaluate((key) => {
+      const root = document.querySelector<HTMLElement>('[aria-label="これからの予定"]');
+      const el = root?.querySelector<HTMLElement>(`[data-item-key="${CSS.escape(key)}"]`);
+      if (!root || !el) return null;
+      return {
+        offset: el.getBoundingClientRect().top - root.getBoundingClientRect().top,
+        first: document.querySelector('[id^="date-"]')?.id ?? '',
+      };
+    }, before2.key);
+    expect(after2, before2.key).not.toBeNull();
+    // 上の端を削った回だけを数える（削らなかった回は位置が変わらないのが当たり前）
+    if (after2 && after2.first !== before2.first) {
+      expect(
+        Math.abs(after2.offset - before2.offset),
+        JSON.stringify({ before2, after2 }),
+      ).toBeLessThanOrEqual(2);
+      checked++;
+    }
+  }
+  expect(checked).toBeGreaterThan(0);
+  await page.getByRole('button', { name: '今日に戻る' }).click();
+  await expect(page.locator(`#date-${dayFromToday(0)}`)).toBeInViewport();
   // 他人の非公開は「予定あり」
   await expect(list).not.toContainText('E2E 毎日の内緒');
+});
+
+test('メモのリンクは http(s) だけ。rel="noopener noreferrer" で別の画面に開く（§18 T4）', async ({
+  page,
+  request,
+}) => {
+  const e = await createAs(request, 'papa', {
+    title: 'E2E リンクのメモ',
+    allDay: false,
+    startAt: `${dayFromToday(2)}T12:00:00+09:00`,
+    note: '地図 https://example.com/map?q=1 と javascript:alert(1) と data:text/html,x',
+  });
+  await page.goto(`/e/${e.id}`);
+  const detail = page.getByRole('dialog', { name: '予定の詳細' });
+  await expect(detail).toContainText('javascript:alert(1)');
+  const links = detail.locator('a[href]');
+  await expect(links).toHaveCount(1);
+  await expect(links.first()).toHaveAttribute('href', 'https://example.com/map?q=1');
+  await expect(links.first()).toHaveAttribute('rel', 'noopener noreferrer');
+  await expect(links.first()).toHaveAttribute('target', '_blank');
 });

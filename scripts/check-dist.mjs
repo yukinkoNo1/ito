@@ -5,6 +5,7 @@
 import { readdirSync, readFileSync, statSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { gzipSync } from 'node:zlib';
 
 const repo = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -63,5 +64,32 @@ for (const t of targets) {
   }
 }
 
+// §19: 初回表示の JS（index.html が読む script と modulepreload）は gzip で 200KB 以内
+const JS_BUDGET = 200 * 1000;
+let initialJs = 0;
+try {
+  const html = readFileSync(path.join(repo, 'apps/web/dist/index.html'), 'utf8');
+  const urls = [
+    ...html.matchAll(/<script[^>]*\bsrc="([^"]+\.js)"/g),
+    ...html.matchAll(/<link[^>]*rel="modulepreload"[^>]*href="([^"]+\.js)"/g),
+  ].map((m) => m[1]);
+  for (const url of new Set(urls)) {
+    const file = path.join(repo, 'apps/web/dist', url.replace(/^\//, ''));
+    initialJs += gzipSync(readFileSync(file)).length;
+  }
+  if (urls.length === 0) throw new Error('no script');
+} catch {
+  process.stderr.write('NG apps/web/dist/index.html の JS を測れません\n');
+  problems++;
+}
+if (initialJs > JS_BUDGET) {
+  process.stderr.write(
+    `NG 初回表示の JS が gzip で ${initialJs} バイト（§19 の上限 ${JS_BUDGET}）\n`,
+  );
+  problems++;
+}
+
 if (problems > 0) process.exit(1);
-process.stdout.write('check-dist: OK（秘密情報・開発用のものは入っていません）\n');
+process.stdout.write(
+  `check-dist: OK（秘密情報・開発用のものは入っていません。初回表示の JS は gzip で ${Math.round(initialJs / 1000)}KB）\n`,
+);

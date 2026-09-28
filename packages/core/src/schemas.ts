@@ -1,3 +1,4 @@
+import './zod-config';
 import { z } from 'zod';
 import { UUID_RE } from './ids';
 import { isValidDate, isValidTime, parseIsoToMs } from './jst';
