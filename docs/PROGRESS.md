@@ -1,5 +1,5 @@
 # 進み具合
-今: 最終確認 / 次にやること: RUNBOOK の最終確認のコマンド（pnpm install --frozen-lockfile・pnpm check・pnpm build・pnpm test:e2e・docker compose build・up -d --wait・exec app node dist/cli.js feed-token list・down）→ 受け入れ基準の見直し → 最終報告
+今: 完了（下の「最終報告」） / 次にやること: 持ち主の「要確認」（本番の設置と Tailscale のポリシー、いえボードの連携キー、iPhone での通知と ICS、pnpm ai:eval）
 
 ## ステップ
 | ステップ | 状態（未着手・作業中・完了） | タグ | メモ |
@@ -13,7 +13,7 @@
 | Phase 5 一言入力 | 完了 | phase-5 | 退避した作業を戻し、Anthropic の呼び出しを公式 SDK にした。レビューの 21 件（high 1・medium 11・low 9）を直した（§24 D37） |
 | Phase 7 仕上げ | 完了 | phase-7 | 空き時間・検索・書き出し・バックアップと掃除・同期と静的の gzip・これからの一覧の範囲・ビルドの検査・性能・security-map。レビューの 16 件を直した（§24 D38） |
 | 総点検 | 完了 | audit | 5 つの観点（本人確認・CSRF と XSS と SW・非公開・フィード・入力と秘密とコンテナ）で攻撃の経路を洗い出し、反証できなかった 18 件（高 2・中 5・低 11）を再現テストを書いてから直した（docs/security-review.md、§24 D39） |
-| 最終確認 | 未着手 | — | |
+| 最終確認 | 完了 | — | RUNBOOK の最終確認のコマンドはすべて EXIT=0（aef14e8）。途中で pnpm build が初回表示の JS の上限（200KB）を 497 バイト超えて EXIT=1 になり、上限は変えずに直して（§24 D42）最初からやり直した。受け入れ基準 119 項目はすべて OK |
 
 ## 受け入れ基準
 | ステップ | 項目 | 確認方法 | 結果（後で確認を含む） |
@@ -206,3 +206,55 @@
 - E2E を `--repeat-each` で繰り返すと、同じサーバーに同じ件名の予定が残るため 2 回目から件名の重複で落ちる（1 回目はすべて通る。E2E のサーバーは実行のたびに空の DB で始まる。retries は 0）
 - vite-plugin-pwa 1.3 が Vite 8 で「inlineDynamicImports option is deprecated」の警告を出す（ビルドは成功する。プラグイン側の問題）
 - E2E の phase6.spec.ts は、ギャラリーと本番のスクリーンショットの比較を、見本の予定を変えるテスト（予定の追加・時刻の直し）より先に置いている（同じファイルの中で書いた順に走る。workers: 1）
+
+## 最終報告（2026-09-28）
+
+### 作ったもの
+家族専用のカレンダー PWA「いと」。Hono のサーバー（SQLite・Tailscale の ID ヘッダで本人確認・CSRF の検査・他人の非公開は「予定あり」に投影）と、React＋Dexie のローカルファーストの PWA（オフラインで見て書ける・送信待ちと競合の解決・Service Worker）を、共有の @ito/core（JST の日付・zod のスキーマ・RRULE の展開・祝日・空き時間・一言入力のルール解析）でつないだ。繰り返し（この回だけ・これ以降・すべて）、Web Push の通知（開始時・朝のまとめ・前夜の予告・家族の変更）、一言入力（ルール解析＋Anthropic の公式 SDK。鍵がなければルールだけ）、空き時間・検索・書き出し（JSON・ICS）、いえボード向けの表示用フィード（連携キーだけで認証）、毎日のバックアップと掃除、本番用の Docker Compose（ts のカーネルモード・127.0.0.1・読み取り専用・uid 10001・cap_drop）まで。総点検（攻撃者の視点）で 18 件を直し、その修正を 8 回レビューして確かめられた 46 件（自分で見つけた 1 件を含む）をすべて、失敗する再現テストを書いてから直した（docs/security-review.md）。このセッションでは (A) 修正のレビューの 5 回目の続き（止めたワークフローの再開）から 8 回目までを終え（5 回目 G1〜G6・6 回目 H1・H2・7 回目 I1〜I6・8 回目 J1・J2）、(B) E2E の long task（52ms）はトレースで原因（端で足すたびの 140 日分の描き直しと描画のタスクが 50ms すれすれ）を突き止め、しきい値と測り方を変えずに描き直しを小さくして直し（最大 34.7ms。§24 D40）、(C) 最終確認をした。
+
+### 最終確認の結果（aef14e8。長い出力は .logs/final-check.txt）
+- `pnpm install --frozen-lockfile` EXIT=0
+- `pnpm check` EXIT=0（Biome・tsc・Vitest 42 ファイル 705 件）
+- `pnpm build` EXIT=0（check-dist: 秘密情報・開発用のものなし、初回表示の JS は gzip で 195KB）
+- `pnpm test:e2e` EXIT=0（57 件。CSP 違反・コンソールエラー 0 件、§19 の long task を含む）
+- `docker compose build` EXIT=0（イメージの中でも check-dist が OK）
+- `docker compose up -d --wait` EXIT=0（app は healthy）
+- `docker compose exec app node dist/cli.js feed-token list` EXIT=0（止めた確認用のキー 2 件。平文は出ない）
+- `docker compose down` EXIT=0
+- `git status`: クリーン（最終報告のコミットのあとにも確かめる）。`git tag`: audit phase-0 phase-1 phase-2 phase-3 phase-4 phase-5 phase-6 phase-7
+- 途中経過: 1 回目の `pnpm build` は初回表示の JS が 200,497 バイトで §19 の上限 200,000 を超えて EXIT=1。上限は変えず、@ito/core の sideEffects を書いて使わない core のモジュールを初回表示から外し（§24 D42。読み込むだけで効く文を core に足したら落ちるテストも足した）、1 番目のコマンドからやり直した。終わったあと 5173・8787・8788 で待ち受けているプロセスはない
+
+### 受け入れ基準（詳しい表は上の「受け入れ基準」。119 項目すべて OK）
+| ステップ | 項目 | 確認方法 | 結果 |
+|---|---|---|---|
+| Phase 0 土台 | pnpm dev の起動、ID ヘッダの 401/403、CSRF 4 通りの 403、Host 421、/healthz の例外、HOST の検査、セキュリティヘッダと 32KB、compose（読み取り専用・uid 10001・カーネルモードの ts）、SIGTERM、E2E の CSP、zod の jitless（15 項目） | check-dev.mjs、middleware・env・runtime・zod-setup のテスト、docker compose config・build・up・inspect、E2E smoke | OK |
+| Phase 1 予定の中核と表示用フィード | 2 人の同期、他人の非公開は全 API で「予定あり」・更新は 403、409 と Idempotency、祝日、削除→元に戻す、§21 のフィード、連携キーの CLI（401/200/401・平文を出さない）、名前の重複、履歴の差分（12 項目） | events・feed・cli・members のテスト、E2E phase1、feed-check スクリプト（手元・Docker） | OK（朝練のフィードは Phase 3 で後で確認 → OK） |
+| Phase 2 PWA とローカルファースト | オフラインの閲覧と作成、API だけ切れたとき、「新」の印、オフラインの 2 回編集、競合の 3 通りの解決、/api をキャッシュしない、SW の遷移の除外、更新、インストール、§12 の応答ごとの扱い、ログアウト、CSP とコンソールエラー 0、開発用のログインが本番にない（15 項目） | E2E phase2、store・store-review・logout のテスト、pnpm build の検査 | OK |
+| Phase 6 UI 統合 | §22 の型、§6.2 の手数（今日と明日・自分だけ 1 タップ・日付 2 タップ・追加 3 タップ・時刻を直す・空き→書く→保存・一言で保存・家族の変更に気づく）、大きめの文字、ギャラリーとのスクリーンショットの一致、axe、CSP、色、16px と 44px、アイコン、本番のビルドに開発用なし（18 項目） | E2E phase6・phase2・phase5・phase7、phase6.test.ts、pnpm build | OK（「後で確認」の一言で保存は Phase 5、空き→書く→保存は Phase 7 で OK） |
+| Phase 3 繰り返し | §21 の繰り返しのテスト一式、3 通りの展開の一致、COUNT の「これ以降」、後の回からの「すべて」、UNTIL の最終日、reminder_prefs の引き継ぎ、フィードの繰り返し、入力の制限、UI の形、画面（12 項目） | core・server・web の recurrence／series／phase3 のテスト、E2E phase3、feed.test.ts | OK |
+| Phase 4 通知 | §21 の通知のテスト一式、非公開の文面、無効化で購読が消える、購読 API、再購読、SW の push とバッジ、案内、自分への通知、実機の手順（11 項目） | notify・phase4・logout のテスト、E2E phase4・phase4-push、README | OK（実機での確認は要確認） |
+| Phase 5 一言入力 | ルール解析 38 件、AI の応答の差し替え、入力文を残さない、送るもの、変換確定の Enter、一言で保存、重なりの警告（9 項目） | nlp-rules・parse・phase5 のテスト、E2E phase5 | OK（本物の鍵での ai:eval は要確認） |
+| Phase 7 仕上げ | 空き時間、空き→書く→保存、検索、書き出し JSON・ICS、バックアップと掃除、性能（同期 1MB 未満・フィード・long task なし）、ビルドの検査、security-map、依存の監査（11 項目） | freebusy・phase7・export・maintenance・perf のテスト、E2E phase7、check-dist、pnpm audit | OK（iPhone への ICS の取り込みは要確認） |
+| 総点検 | 観点ごとの洗い出しと反証、再現テストを書いてから直す、CSRF をルートの一覧から確かめる、Tailscale の手順、依存の監査、コンテナ、修正のレビュー 1〜8 回目、long task の原因と直し（16 項目） | docs/security-review.md、audit・audit-routes・architecture ほかのテスト、docker compose、pnpm audit、Chrome のトレース | OK（Tailscale のポリシーの確かめは要確認） |
+| 最終確認 | RUNBOOK の最終確認のコマンド、受け入れ基準の見直し、git status と tag | 上の「最終確認の結果」 | OK（すべて EXIT=0） |
+
+### SPEC §24 に足した決定
+- D15 作業の順番（Phase 6 を Phase 2 の次に。後のフェーズの機能が要る項目は「後で確認」）／D16 STATIC_DIR／D17 安全側の細則／D18 管理者の自動登録の名前と色／D19 Node と react-router の版／D20 開発モードの「人の端末」／D21 フィードの last_user_device_at／D22 予定の API の細則／D23 連携キーの確認はキーを表示しないスクリプト／D24 祝日の表／D25 手で確かめる項目の代わり／D26 前回開いた時刻は localStorage／D27 履歴の非公開の扱い／D28 同期の細則／D29 §22 の型に足したもの／D30 コントラストと 44px のための小さな変更／D31 ギャラリーと見本／D32 Phase 6 のレビューの画面の細則／D33・D34 繰り返しの細則／D35・D36 通知の細則／D37 一言入力の細則／D38 仕上げの細則／D39 総点検で決めたこと／D40 これからの一覧の描き直しを小さくする（long task）／D41 総点検の修正のレビューで決めたこと（COUNT の展開、回の出ない期間の検査、BYSETPOS は 7 個まで、繰り返しの上限は持ち主ごとに終わっていないもの 100 件・終わったものを含めて 400 件、検索は文字と人で絞って今日から広げる窓で展開、ゴミ箱から戻せない理由 ほか）／D42 @ito/core の sideEffects（初回表示の JS から使わない core のモジュールを外す。上限は変えない）
+
+### 要確認（持ち主がやること。根拠は上の「要確認」）
+- 本番の設置（README「本番の立て方」）と、Tailscale のアクセス制御の確かめ（README「設置したあとの確かめ方」の 4 項目。:8787 に tailnet から届かないこと、tag:ieboard から人の端末へ通信を始められないこと ほか）
+- いえボードとつなぐ: 本番で `docker compose exec app node dist/cli.js feed-token create --name いえボード` → いえボードの config/secrets.yaml に書く
+- iPhone での通知の確認（ホーム画面に追加 → 通知オン → テスト通知 → 5 分後の予定 → 翌朝のまとめ）。本番の app.env に VAPID の鍵と VAPID_SUBJECT を書く
+- ICS を iPhone のカレンダーに取り込み、繰り返し・終日・この回だけ変更した回を確かめる
+- 本物の ANTHROPIC_API_KEY で `pnpm ai:eval`（§21 の 38 件との差を見る）
+
+### 既知の問題と、次にやるとよいこと
+- `pnpm audit` で drizzle-kit の中の esbuild（開発用の道具）の moderate 1 件。バンドルとイメージには入らない。drizzle-kit の更新で消える
+- 初回表示の JS は 195KB（上限 200KB）。足すときは開いたときに読む画面へさらに分ける
+- 検索の残るリスク: 長い終日の繰り返しを 1 人 400 件まで作ると 1 回 0.5 秒ほど、COUNT を使い切った規則は今日から前へ探す（docs/security-review.md の 8 回目・7 回目）。次にやるなら COUNT の最後の回を覚えて窓の起点にする
+- E2E を --repeat-each で繰り返すと 2 回目から件名の重複で落ちる（1 回ごとに空の DB で始まる）。vite-plugin-pwa 1.3 が Vite 8 で非推奨の警告を出す（ビルドは成功）
+- 次にやるとよいこと: 上の要確認（特に実機の通知と Tailscale のポリシー）、ai:eval の結果でルール解析と例を直す、drizzle-kit の更新
+
+### 動かし方
+- 開発: `corepack enable --install-directory .tools/bin pnpm` → `export PATH="$PWD/.tools/bin:$PATH"` → `pnpm install` → `node scripts/dev-setup.mjs`（開発用の鍵と設定。値は表示しない）→ `pnpm seed` → `pnpm dev`（http://localhost:5173。API は :8787）。確かめるのは `pnpm check`・`pnpm build`・`pnpm test:e2e`
+- 本番（Ubuntu＋Docker Compose。README「本番の立て方」）: Tailscale の管理画面で MagicDNS・HTTPS・ポリシー・tag:ito の認証キー → `cd deploy` → `.env`（TS_AUTHKEY）と `app.env`（APP_ORIGIN・ADMIN_LOGINS・VAPID の鍵など）を例から作って chmod 600 → `docker compose up -d --build` → `https://ito.<tailnet>.ts.net` を開き、設定の「家族」で家族を登録。更新は `git pull && docker compose up -d --build`、バックアップは /data/backups を restic の対象にする
