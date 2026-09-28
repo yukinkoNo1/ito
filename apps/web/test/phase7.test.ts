@@ -18,6 +18,7 @@ import {
   MAX_FLOW_DAYS,
   reuseSame,
   sameData,
+  sortMembersKeepingSame,
 } from '../src/viewmodels/screens';
 import { rememberQuery, searchOccurrences, searchTerms } from '../src/viewmodels/search';
 import { ev, M, members } from './fixtures';
@@ -427,6 +428,28 @@ describe('これからの一覧の描き直しを小さくする（§19。§24 D
       if (before && sameData(before, item)) expect(item).toBe(before);
     }
     expect(merged.map((i) => i.key)).toEqual(longer.items.map((i) => i.key));
+  });
+
+  it('sortMembersKeepingSame: 家族の一覧は作った順に並べ、同期で同じ中身を書き直しても前の配列を使う（useMembers。レビュー 2 回目 D8・3 回目 E4）', () => {
+    const a = {
+      id: 'a',
+      createdAt: '2026-01-01T00:00:00+09:00',
+      name: 'お父さん',
+      aliases: ['パパ'],
+    };
+    const b = {
+      id: 'b',
+      createdAt: '2026-02-01T00:00:00+09:00',
+      name: 'お母さん',
+      aliases: [] as string[],
+    };
+    const first = sortMembersKeepingSame(null, [b, a]);
+    expect(first.map((m) => m.id)).toEqual(['a', 'b']);
+    // 同期で消して書き直した（別のオブジェクト・並びも違う）が中身は同じ
+    expect(sortMembersKeepingSame(first, [structuredClone(b), structuredClone(a)])).toBe(first);
+    const renamed = sortMembersKeepingSame(first, [{ ...a, name: 'パパ' }, structuredClone(b)]);
+    expect(renamed).not.toBe(first);
+    expect(renamed[0]?.name).toBe('パパ');
   });
 
   it('keepSame: 同期で同じ中身を書き直しても前の配列を使う（家族の一覧。レビュー 2 回目 D8）', () => {

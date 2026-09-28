@@ -12,7 +12,7 @@ import {
 } from 'react';
 import { ItoDb, type LocalEvent } from '../data/db';
 import { DataStore, type SyncState } from '../data/store';
-import { keepSame } from '../viewmodels/same-data';
+import { sortMembersKeepingSame } from '../viewmodels/same-data';
 
 interface DataContextValue {
   db: ItoDb;
@@ -83,10 +83,7 @@ export function useMembers(): MemberDTO[] {
   // 別の配列にしない。§24 D40。総点検のレビュー 2 回目 D8）
   const previous = useRef<MemberDTO[] | null>(null);
   return useMemo(() => {
-    const sorted = [...(members ?? [])].sort((a, b) =>
-      a.createdAt < b.createdAt ? -1 : a.createdAt > b.createdAt ? 1 : a.id < b.id ? -1 : 1,
-    );
-    previous.current = keepSame(previous.current, sorted);
+    previous.current = sortMembersKeepingSame(previous.current, members ?? []);
     return previous.current;
   }, [members]);
 }

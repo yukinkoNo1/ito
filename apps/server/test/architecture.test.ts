@@ -87,4 +87,12 @@ describe('リポジトリの決まり', () => {
     const script = readFileSync(path.join(repo, 'scripts/check-dev.mjs'), 'utf8');
     expect(script).toMatch(/\/api\/me['"`],\s*\{[^}]*X-Ito-Client/);
   });
+
+  it('useMembers は家族の一覧を sortMembersKeepingSame で作る（同期で同じ中身を書き直しても同じ配列。総点検のレビュー 3 回目 E4）', () => {
+    const source = readFileSync(path.join(repo, 'apps/web/src/app/data-context.tsx'), 'utf8');
+    const body = source.slice(source.indexOf('export function useMembers('));
+    const hook = body.slice(0, body.indexOf('\n}\n') + 2);
+    expect(hook).toContain('sortMembersKeepingSame(previous.current');
+    expect(hook).not.toMatch(/\.sort\(/);
+  });
 });

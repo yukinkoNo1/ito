@@ -421,44 +421,63 @@ function periodHasOccurrence(rule: RuleParts, periodStart: Wall): boolean {
   return onePeriod(rule, periodStart).after(toFloating(periodStart), true) !== null;
 }
 
-const countCache = new LruCache<number>(20_000);
+/** 規則の形（BY の指定）ごとの、期間の種類 → 回の数 */
+const periodCountTables = new LruCache<Map<string, number>>(4000);
 
 /**
- * その期間（毎月は月、毎年は年）に rrule が出す回の数（BYSETPOS の重複も数える＝COUNT の数え方）。
- * 期間の種類（月の長さ・1 日の曜日、毎年は前後の年のうるう年と 1/1 の曜日）ごとに覚える
+ * その期間（毎月は月、毎年は年）に rrule が出す回の数（BYSETPOS の重複も数える＝COUNT の数え方）を返す関数。
+ * 回の数は期間の種類（月の長さ・1 日の曜日、毎年は前後の年のうるう年と 1/1 の曜日）と BY の指定だけで決まる
+ * （時刻・間隔には関係しない）ので、規則の形ごとに 1 つの表に覚える（総点検のレビュー 2 回目 D2・3 回目 E1）
  */
-function occurrencesInPeriod(ex: RuleParts, y: number, m: number, time: TimeHM): number {
-  const kind =
-    ex.freq === 'MONTHLY'
+function periodCounter(ex: RuleParts): (y: number, m: number) => number {
+  const shape = formatRrule({ ...ex, interval: 1, count: null, until: null });
+  const table = periodCountTables.get(shape) ?? periodCountTables.set(shape, new Map());
+  const monthly = ex.freq === 'MONTHLY';
+  return (y, m) => {
+    const kind = monthly
       ? `${m}|${daysInMonth(y, m)}|${firstWeekday(y, m)}`
       : `${isLeapYear(y - 1)}|${isLeapYear(y)}|${isLeapYear(y + 1)}|${firstWeekday(y, 1)}`;
-  const key = `${formatRrule(ex)}|${time}|${kind}`;
-  const hit = countCache.get(key);
-  if (hit !== undefined) return hit;
-  const start = { date: `${representativeYear(y)}-${pad2(m)}-01`, time };
-  return countCache.set(key, onePeriod(ex, start).all().length);
+    const known = table.get(kind);
+    if (known !== undefined) return known;
+    const start = { date: `${representativeYear(y)}-${pad2(m)}-01`, time: '00:00' };
+    const n = onePeriod(ex, start).all().length;
+    table.set(kind, n);
+    return n;
+  };
 }
+
+/** COUNT の毎月・毎年の「使った回の数」を覚える間隔（期間の数） */
+const USED_CHECKPOINT = 64;
+/** 規則と開始ごとの、1 + 64i 期間ぶんに使う回の数（i = 0, 1, 2, …） */
+const usedCheckpoints = new LruCache<number[]>(20_000);
 
 /**
  * COUNT の毎月・毎年で、開始から k 期間ぶん（間隔ごと）に使う回の数。最初の期間は開始より後だけを数える。
- * 期間ごとの回の数は種類ごとに覚え、合計は（規則・開始・k）ごとに覚える（総点検のレビュー 2 回目 D2）
+ * 64 期間ごとの合計を覚えておき、範囲が動いても近い区切りから足す（開始から足し直さない。3 回目 E2）
  */
 function usedByPeriods(rule: RuleParts, ex: RuleParts, dtstart: Wall, k: number): number {
   const plain = { ...ex, count: null, until: null };
-  const key = `${formatRrule(plain)}|${dtstart.date}T${dtstart.time}|${k}|${rule.count}`;
-  const hit = countCache.get(key);
-  if (hit !== undefined) return hit;
+  const key = `${formatRrule(plain)}|${dtstart.date}T${dtstart.time}`;
+  const count = periodCounter(plain);
   const { year, month } = parseDate(dtstart.date);
   const monthly = rule.freq === 'MONTHLY';
   const origin = monthly ? year * 12 + (month - 1) : year;
-  let used = onePeriod(plain, dtstart).all().length;
-  for (let j = 1; j < k && used < (rule.count ?? 0); j++) {
+  const inPeriod = (j: number) => {
     const at = origin + j * rule.interval;
-    used += monthly
-      ? occurrencesInPeriod(plain, Math.floor(at / 12), (at % 12) + 1, dtstart.time)
-      : occurrencesInPeriod(plain, at, 1, dtstart.time);
+    return monthly ? count(Math.floor(at / 12), (at % 12) + 1) : count(at, 1);
+  };
+  const checkpoints =
+    usedCheckpoints.get(key) ?? usedCheckpoints.set(key, [onePeriod(plain, dtstart).all().length]);
+  const target = Math.floor((k - 1) / USED_CHECKPOINT);
+  while (checkpoints.length - 1 < target) {
+    const i = checkpoints.length - 1;
+    let used = checkpoints[i] ?? 0;
+    for (let j = 1 + USED_CHECKPOINT * i; j <= USED_CHECKPOINT * (i + 1); j++) used += inPeriod(j);
+    checkpoints.push(used);
   }
-  return countCache.set(key, used);
+  let used = checkpoints[target] ?? 0;
+  for (let j = 1 + USED_CHECKPOINT * target; j < k; j++) used += inPeriod(j);
+  return used;
 }
 
 const densityCache = new LruCache<boolean>(4000);

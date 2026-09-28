@@ -525,3 +525,42 @@ describe('総点検のレビュー（2 回目）D3: 範囲の外の開始に終�
     }
   });
 });
+
+describe('総点検のレビュー（3 回目）E1・E2: COUNT の毎月・毎年で覚えるものが入れ替わり続けない・範囲が動いても開始から足し直さない', () => {
+  const pad = (n: number) => String(n).padStart(2, '0');
+  const starts = Array.from({ length: 600 }, (_, i) =>
+    wall(addDays('1970-01-01', i * 3), `${pad(8 + Math.floor(i / 60))}:${pad(i % 60)}`),
+  );
+
+  it('E1 始まる時刻がばらばらな 600 本でも、2 回目の展開は 100ms 未満', async () => {
+    vi.resetModules();
+    const r = await import('../src/recurrence');
+    for (const text of [
+      'FREQ=MONTHLY;COUNT=1000',
+      'FREQ=MONTHLY;BYDAY=MO,TU,WE,TH,FR;BYSETPOS=-1;COUNT=1000',
+    ]) {
+      const parsed = r.parseRrule(text);
+      if (!parsed.ok) throw new Error(parsed.message);
+      const window = [wall('2026-09-28'), wall('2026-10-01')] as const;
+      for (const s of starts) r.ruleStarts(parsed.rule, s, ...window);
+      const t0 = performance.now();
+      for (const s of starts) r.ruleStarts(parsed.rule, s, ...window);
+      // 直す前はおよそ 0.56〜0.92 秒
+      expect([text, performance.now() - t0 < 100]).toEqual([text, true]);
+    }
+  });
+
+  it('E2 表示範囲を 1 か月ずつ動かしても、1 回の展開は 600 本で 100ms 未満', async () => {
+    vi.resetModules();
+    const r = await import('../src/recurrence');
+    const parsed = r.parseRrule('FREQ=MONTHLY;COUNT=1000');
+    if (!parsed.ok) throw new Error(parsed.message);
+    for (const s of starts) r.ruleStarts(parsed.rule, s, wall('2026-09-28'), wall('2026-10-01'));
+    for (const month of ['2026-10-28', '2026-11-28', '2026-12-28']) {
+      const t0 = performance.now();
+      for (const s of starts) r.ruleStarts(parsed.rule, s, wall(month), wall(addDays(month, 3)));
+      // 直す前は 1 か月動かすたびにおよそ 0.27 秒
+      expect([month, performance.now() - t0 < 100]).toEqual([month, true]);
+    }
+  });
+});

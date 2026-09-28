@@ -21,7 +21,7 @@ import { longDateLabel } from './labels';
 import { buildMonth, toMonthCell } from './month';
 import { toMemberVMs, type VmContext } from './occurrence';
 
-export { keepSame, reuseSame, sameData } from './same-data';
+export { keepSame, reuseSame, sameData, sortMembersKeepingSame } from './same-data';
 
 export const EMPTY_EXAMPLES = ['明日18時 みんなで夕食', '土曜10時 父 ゴルフ', '毎週日曜 母 ヨガ'];
 export const COMPOSER_HINT = '例: 土曜10時 父 ゴルフ';

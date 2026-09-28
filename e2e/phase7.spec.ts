@@ -314,7 +314,7 @@ test('§19 これからの一覧: 1 年分の予定でスクロールしても 5
   await expect(list).not.toContainText('E2E 毎日の内緒');
 });
 
-test('§19 端で読み足している最中に週の帯で日を選んでも、選んだ日へ移る（読み足しの位置の合わせ直しで戻さない。総点検のレビュー 2 回目 D7）', async ({
+test('§19 端で読み足している最中に「次の週」で移っても、移った日が見える（読み足しの位置の合わせ直しで戻さない。総点検のレビュー 2 回目 D7）', async ({
   page,
   request,
 }) => {
@@ -339,32 +339,36 @@ test('§19 端で読み足している最中に週の帯で日を選んでも、
   await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
   await page.mouse.wheel(0, 50);
   await page.waitForTimeout(300);
-  const tomorrow = dayFromToday(1);
-  const [, month, day] = tomorrow.split('-').map(Number);
-  // 下の端へ動かして読み足させ、一覧が変わった直後（次の描画より前）に、週の帯で明日を押す
-  await page.evaluate((label) => {
+  // 「次の週」はどの曜日でも週の帯にある（明日は土曜日には週の帯にない。3 回目 E3）
+  const nextWeek = dayFromToday(7);
+  // 下の端へ動かして読み足させ、一覧が変わった直後（次の描画より前）に「次の週」を押す
+  await page.evaluate(() => {
     const root = document.querySelector<HTMLElement>('[aria-label="これからの予定"]');
     if (!root) throw new Error('一覧がない');
+    const w = window as unknown as { __clicked?: boolean };
     const lastDay = () => [...root.querySelectorAll('[id^="date-"]')].at(-1)?.id;
     const before = lastDay();
     const observer = new MutationObserver(() => {
       if (lastDay() === before) return;
       observer.disconnect();
-      const button = [...document.querySelectorAll<HTMLElement>('.week-days button')].find((b) =>
-        b.getAttribute('aria-label')?.startsWith(label),
-      );
+      const button = document.querySelector<HTMLElement>('[aria-label="次の週"]');
+      w.__clicked = button !== null;
       button?.click();
     });
     observer.observe(root, { childList: true, subtree: true });
     root.scrollTop = root.scrollHeight - root.clientHeight - 100;
-  }, `${month}月${day}日 `);
+  });
   await page.waitForTimeout(1000);
+  // 押せたこと（押せなかったら、ずれの原因を取り違えないようにここで落とす）
+  expect(await page.evaluate(() => (window as unknown as { __clicked?: boolean }).__clicked)).toBe(
+    true,
+  );
   const offset = await page.evaluate((date) => {
     const root = document.querySelector<HTMLElement>('[aria-label="これからの予定"]');
     const el = document.getElementById(`date-${date}`);
     if (!root || !el) return null;
     return el.getBoundingClientRect().top - root.getBoundingClientRect().top;
-  }, tomorrow);
+  }, nextWeek);
   expect(offset).not.toBeNull();
   expect(Math.abs(offset ?? 9999)).toBeLessThanOrEqual(2);
 });

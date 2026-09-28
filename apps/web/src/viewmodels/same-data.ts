@@ -36,3 +36,17 @@ export function reuseSame<T extends { key: string }>(prev: readonly T[] | null, 
 export function keepSame<T>(prev: T | null, next: T): T {
   return prev !== null && sameData(prev, next) ? prev : next;
 }
+
+/**
+ * 家族の一覧を作った順（同じなら ID 順）に並べる。中身が前と同じなら前の配列を返す（同期で同じ中身を書き直しても、
+ * 画面の文脈を作り直さない。useMembers はこれだけを呼ぶ。総点検のレビュー 2 回目 D8・3 回目 E4）
+ */
+export function sortMembersKeepingSame<T extends { createdAt: string; id: string }>(
+  prev: T[] | null,
+  rows: readonly T[],
+): T[] {
+  const sorted = [...rows].sort((a, b) =>
+    a.createdAt < b.createdAt ? -1 : a.createdAt > b.createdAt ? 1 : a.id < b.id ? -1 : 1,
+  );
+  return keepSame(prev, sorted);
+}
