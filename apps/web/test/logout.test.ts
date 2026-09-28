@@ -38,7 +38,11 @@ describe('この端末からログアウト（§17）', () => {
     });
     expect(order).toEqual(['push']);
     expect(deleted).toEqual(['workbox-precache-v2', 'other']);
-    expect([...store.keys()]).toEqual(['other']);
+    // 端末の保存は消し、「通知を自分で止めた」印だけを付け直す（次に開いたとき勝手に購読し直さない）
+    expect([...store.entries()]).toEqual([
+      ['other', 'keep'],
+      ['ito.push.optedOut', '1'],
+    ]);
     const names = await indexedDB.databases();
     expect(names.map((d) => d.name)).not.toContain('logout-test');
   });

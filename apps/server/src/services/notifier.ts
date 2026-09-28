@@ -35,7 +35,7 @@ import {
   todayJst,
   toJstParts,
 } from '@ito/core';
-import { and, eq, inArray, isNull } from 'drizzle-orm';
+import { and, eq, isNull } from 'drizzle-orm';
 import type { DbLike } from '../db/client';
 import {
   type MemberRow,
@@ -46,10 +46,11 @@ import {
 } from '../db/schema';
 import type { Logger } from '../logger';
 import { countUnread } from './activity';
-import { listActiveMembers } from './members';
+import { noticeSummary, noticeTitle } from './family-notices';
+import { listActiveMembers, listAllMembers } from './members';
 import { listSubscriptionsOf, markDelivered, markFailed, removeGone } from './push';
 import type { PushOptions, PushSender } from './push-sender';
-import { loadActiveEvents } from './records';
+import { loadActiveEvents, loadEventsByIds } from './records';
 
 /**
  * 通知を作って送る（§15）。送り先ごとに projectEvent と同じ規則で中身を見せるかを決める
@@ -342,7 +343,10 @@ export function changePayload(notices: PendingNoticeRow[], badge?: number): Push
   };
 }
 
-/** 2 分まとめ・静かな時間（§15）。最後の変更から 2 分たち、静かな時間でなければ 1 通にまとめて送る */
+/**
+ * 2 分まとめ・静かな時間（§15）。最後の変更から 2 分たち、静かな時間でなければ 1 通にまとめて送る。
+ * 送る前に、今の予定で件名の見え方を決め直す（積んだあとに非公開にされても、前の件名を送らない。§10・§18 T5）
+ */
 export async function flushFamilyNotices(deps: NotifierDeps): Promise<number> {
   const { db, clock } = deps;
   const now = clock.now();
@@ -355,36 +359,55 @@ export async function flushFamilyNotices(deps: NotifierDeps): Promise<number> {
     byRecipient.set(p.recipientId, list);
   }
   const active = new Map(listActiveMembers(db).map((m) => [m.id, m]));
-  const flush = (ids: string[]) => {
-    for (let i = 0; i < ids.length; i += 500) {
+  const names = new Map(listAllMembers(db).map((m) => [m.id, m.name]));
+  const events = new Map(
+    loadEventsByIds(db, [...new Set(pending.map((p) => p.eventId))]).map((e) => [e.id, e]),
+  );
+  // 送ったものとして片づけるのは、読んだときのままの行だけ（送っているあいだに同じ行へまとめた変更は、次の実行で送る）
+  const flush = (rows: PendingNoticeRow[]) => {
+    for (const r of rows) {
       db.update(pendingNotices)
         .set({ flushedAt: now })
         .where(
-          and(inArray(pendingNotices.id, ids.slice(i, i + 500)), isNull(pendingNotices.flushedAt)),
+          and(
+            eq(pendingNotices.id, r.id),
+            eq(pendingNotices.createdAt, r.createdAt),
+            isNull(pendingNotices.flushedAt),
+          ),
         )
         .run();
     }
   };
   let sent = 0;
   for (const [recipientId, list] of byRecipient) {
-    const ids = list.map((n) => n.id);
     const member = active.get(recipientId);
     const settings = member ? notificationSettingsOf(member) : null;
     // 無効化した人・設定を off にした人の分は捨てる
     if (!member || !settings || settings.familyChanges === 'off') {
-      flush(ids);
+      flush(list);
       continue;
     }
     const last = Math.max(...list.map((n) => n.createdAt));
     if (now - last < CHANGE_BATCH_MIN * MINUTE_MS) continue;
     if (inQuietHours(now, settings.quietHours)) continue;
     list.sort((a, b) => a.createdAt - b.createdAt || (a.id < b.id ? -1 : 1));
-    const outcome = await deliver(deps, member, changePayload(list, badgeOf(db, member)), {
+    // 予定が見つからない行は送らない（安全側）
+    const notices = list.flatMap((n) => {
+      const event = events.get(n.eventId);
+      if (!event) return [];
+      const title = noticeTitle(event, member.id);
+      return [{ ...n, summary: noticeSummary(names.get(n.actorId) ?? '家族', title, n.action) }];
+    });
+    if (notices.length === 0) {
+      flush(list);
+      continue;
+    }
+    const outcome = await deliver(deps, member, changePayload(notices, badgeOf(db, member)), {
       TTL: DIGEST_TTL_SEC,
       urgency: 'normal',
     });
     if (outcome === 'retry') continue;
-    flush(ids);
+    flush(list);
     if (outcome === 'sent') sent++;
   }
   return sent;

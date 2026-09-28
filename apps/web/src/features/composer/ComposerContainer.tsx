@@ -12,7 +12,13 @@ import type { ComposerVM, EventDraftVM } from '../../ui/types';
 import { applyDraftPatch } from '../../viewmodels/composer';
 import { buildComposerVM, monthEndQuestion } from '../../viewmodels/composer-vm';
 import { draftToInput, emptyDraft, eventToDraft } from '../../viewmodels/detail';
-import { draftDefaults, prefOf } from '../../viewmodels/reminders';
+import {
+  draftDefaults,
+  followReminders,
+  prefOf,
+  type ReminderDraftState,
+  shouldWriteReminders,
+} from '../../viewmodels/reminders';
 import {
   lostCounts,
   occurrenceChanges,
@@ -40,6 +46,8 @@ interface ComposerState {
   remindersTouched: boolean;
   /** 開いたときの本人の通知の行（直すときだけ。なければ既定値に追従） */
   reminderPref: number[] | undefined;
+  /** 本人の行を付けた予定の種類（終日か）。切り替えたら行は使わず既定値に戻す */
+  reminderPrefAllDay: boolean;
   /** 本人の既定値（§15 の設定） */
   reminderDefaults: { timedDefaults: number[]; allDayDefaults: number[] };
 }
@@ -114,6 +122,7 @@ export function ComposerContainer() {
         askScope: false,
         remindersTouched: false,
         reminderPref,
+        reminderPrefAllDay: made.allDay,
         reminderDefaults,
       });
     })();
@@ -145,15 +154,16 @@ export function ComposerContainer() {
     setState((s) => {
       if (!s) return s;
       const busyTouched = s.busyTouched || patch.busy !== undefined;
-      const remindersTouched = s.remindersTouched || patch.myReminders !== undefined;
       const patched = applyDraftPatch(s.draft, patch, { busyTouched });
-      // 触っていなければ、終日・担当の変更に合わせて既定値に追従する
-      const draft = remindersTouched
-        ? patched
-        : {
-            ...patched,
-            myReminders: s.reminderPref ?? draftDefaults(patched, meId ?? '', s.reminderDefaults),
-          };
+      // 触っていなければ、終日・担当の変更に合わせて既定値に追従する。終日⇔時刻ありの切り替えでは既定値に戻す
+      const followed = followReminders(
+        s.draft,
+        patched,
+        { ...reminderStateOf(s), touched: s.remindersTouched || patch.myReminders !== undefined },
+        meId ?? '',
+      );
+      const remindersTouched = followed.touched;
+      const draft = { ...patched, myReminders: followed.myReminders };
       return {
         ...s,
         draft,
@@ -181,7 +191,7 @@ export function ComposerContainer() {
     if (!r.ok) return fail(r.errors.map((e) => e.message).join('。'));
     const t = r.target;
     // 自分への通知は、保存したあとのシリーズに（「これ以降」なら新しいシリーズ）
-    if (state.remindersTouched) {
+    if (shouldWriteReminders(state.draft, reminderStateOf(state))) {
       void store.setMyReminders(t?.eventId ?? editId, state.draft.myReminders);
     }
     // 下に詳細が開いていて、保存で回が変わったら（日時を動かした・「これ以降」）、詳細をその回に移す
@@ -210,7 +220,8 @@ export function ComposerContainer() {
       // 全部の項目を送る（手元で今の予定との差だけにする。サーバーは今の予定に当てて検証する）
       const r = await store.updateEvent(editId, input);
       if (!r.ok) return fail(r.errors.map((e) => e.message).join('。'));
-      if (state.remindersTouched) void store.setMyReminders(editId, state.draft.myReminders);
+      if (shouldWriteReminders(state.draft, reminderStateOf(state)))
+        void store.setMyReminders(editId, state.draft.myReminders);
       nav.closeComposer();
       toast.show({
         kind: 'undo',
@@ -281,6 +292,16 @@ export function ComposerContainer() {
       />
     </EventComposerSheet>
   );
+}
+
+/** 書く画面の自分への通知の状態 */
+function reminderStateOf(s: ComposerState): ReminderDraftState {
+  return {
+    touched: s.remindersTouched,
+    pref: s.reminderPref,
+    prefAllDay: s.reminderPrefAllDay,
+    defaults: s.reminderDefaults,
+  };
 }
 
 /** 親の繰り返しを書く画面の形に（回の中身には繰り返しがないため） */

@@ -1,8 +1,14 @@
 import { type EventDTO, fromJst, type PushPayload } from '@ito/core';
 import { eq } from 'drizzle-orm';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { notificationLog, pendingNotices, pushSubscriptions } from '../src/db/schema';
-import type { PushOptions, PushResult, PushSender, PushTarget } from '../src/services/push-sender';
+import { events, notificationLog, pendingNotices, pushSubscriptions } from '../src/db/schema';
+import {
+  classifyStatus,
+  type PushOptions,
+  type PushResult,
+  type PushSender,
+  type PushTarget,
+} from '../src/services/push-sender';
 import { createScheduler, type Scheduler } from '../src/services/scheduler';
 import { allDay, as, createEvent, IDS, patchEvent, seedFamily, timed, type Who } from './family';
 import { createTestContext, devEnv, send, type TestContext } from './helpers';
@@ -11,8 +17,13 @@ import { createTestContext, devEnv, send, type TestContext } from './helpers';
 class FakeSender implements PushSender {
   sent: { endpoint: string; payload: PushPayload; options: PushOptions }[] = [];
   next: (endpoint: string) => PushResult = () => ({ kind: 'ok' });
+  /** 送っているあいだに起きること（1 回だけ） */
+  during: (() => Promise<void>) | null = null;
   async send(target: PushTarget, payload: PushPayload, options: PushOptions): Promise<PushResult> {
     this.sent.push({ endpoint: target.endpoint, payload, options });
+    const during = this.during;
+    this.during = null;
+    if (during) await during();
     return this.next(target.endpoint);
   }
   to(who: Who) {
@@ -470,6 +481,179 @@ describe('家族の変更（2 分まとめ・静かな時間）', () => {
     ]);
     // まとめ待ちは送ったら片づく
     const left = ctx.database.db.select().from(pendingNotices).all();
+    expect(left.every((n) => n.flushedAt !== null)).toBe(true);
+  });
+
+  it('2 分以内に非公開にしたら、ほかの家族のまとめ待ちの件名も「予定あり」になる（DB にも残さない）', async () => {
+    await setNotifications('papa', { familyChanges: 'all' });
+    await setNotifications('yuki', { familyChanges: 'mine' });
+    at('2026-09-28', '10:00');
+    const e = await make(
+      'mama',
+      timed('2026-09-29', '10:00', null, { title: '歯医者', memberIds: [IDS.mama, IDS.yuki] }),
+    );
+    at('2026-09-28', '10:01');
+    const res = await patchEvent(ctx, 'mama', e.id, e.version, { visibility: 'private' });
+    expect(res.status).toBe(200);
+    const rows = ctx.database.db.select().from(pendingNotices).all();
+    expect(rows.map((r) => r.summary).join('\n')).not.toContain('歯医者');
+    at('2026-09-28', '10:04');
+    await scheduler.tick();
+    expect(sender.to('papa').map((s) => s.payload.body)).toEqual([
+      'お母さんが「予定あり」を追加しました',
+    ]);
+    // 非公開の予定の担当は持ち主だけになるので、mine のゆきには届かない（まとめ待ちも消える）
+    expect(sender.to('yuki')).toEqual([]);
+    expect(JSON.stringify(sender.sent)).not.toContain('歯医者');
+  });
+
+  it('担当から外したら、mine の人のまとめ待ちは消える', async () => {
+    await setNotifications('yuki', { familyChanges: 'mine' });
+    at('2026-09-28', '10:00');
+    const e = await make(
+      'mama',
+      timed('2026-09-29', '10:00', null, { title: '歯医者', memberIds: [IDS.mama, IDS.yuki] }),
+    );
+    at('2026-09-28', '10:01');
+    const res = await patchEvent(ctx, 'mama', e.id, e.version, { memberIds: [IDS.mama] });
+    expect(res.status).toBe(200);
+    expect(
+      ctx.database.db
+        .select()
+        .from(pendingNotices)
+        .where(eq(pendingNotices.recipientId, IDS.yuki))
+        .all(),
+    ).toEqual([]);
+    at('2026-09-28', '10:04');
+    await scheduler.tick();
+    expect(sender.to('yuki')).toEqual([]);
+  });
+
+  it('送る前に、今の予定で件名の見え方を決め直す', async () => {
+    await setNotifications('papa', { familyChanges: 'all' });
+    at('2026-09-28', '10:00');
+    const e = await make('mama', timed('2026-09-29', '10:00', null, { title: '歯医者' }));
+    // まとめ待ちを通らずに非公開になった（どの経路でも、送る時点の見え方で決める）
+    ctx.database.db.update(events).set({ visibility: 'private' }).where(eq(events.id, e.id)).run();
+    at('2026-09-28', '10:03');
+    await scheduler.tick();
+    expect(sender.to('papa').map((s) => s.payload.body)).toEqual([
+      'お母さんが「予定あり」を追加しました',
+    ]);
+  });
+
+  it('同じ予定でも、別の人の変更は 1 件にまとめない（だれが何をしたかを残す）', async () => {
+    await setNotifications('haru', { familyChanges: 'all' });
+    at('2026-09-28', '10:00');
+    const e = await make('mama', timed('2026-09-29', '10:00', null, { title: '歯医者' }));
+    at('2026-09-28', '10:01');
+    const res = await patchEvent(ctx, 'papa', e.id, e.version, { title: '眼科' });
+    expect(res.status).toBe(200);
+    at('2026-09-28', '10:04');
+    await scheduler.tick();
+    expect(sender.to('haru').map((s) => s.payload.body)).toEqual([
+      'お母さんが「眼科」を追加しました\nお父さんが「眼科」を変更しました',
+    ]);
+  });
+
+  it('送っているあいだに同じ行へまとめた変更は、送ったことにせず次の実行で送る', async () => {
+    await setNotifications('papa', { familyChanges: 'all' });
+    at('2026-09-28', '10:00');
+    const e = await make('mama', timed('2026-09-29', '10:00', null, { title: 'A' }));
+    at('2026-09-28', '10:03');
+    sender.during = async () => {
+      const res = await patchEvent(ctx, 'mama', e.id, e.version, { title: 'B' });
+      expect(res.status).toBe(200);
+    };
+    await scheduler.tick();
+    expect(sender.to('papa').map((s) => s.payload.body)).toEqual(['お母さんが「A」を追加しました']);
+    at('2026-09-28', '10:05');
+    await scheduler.tick();
+    expect(sender.to('papa').map((s) => s.payload.body)).toEqual([
+      'お母さんが「A」を追加しました',
+      'お母さんが「B」を追加しました',
+    ]);
+  });
+});
+
+describe('送信の結果の扱い（§15）', () => {
+  it('状態コードの分け方: 2xx は届いた、404/410 は購読を消す、429・5xx・通信エラーは再送、そのほかは再送しない', () => {
+    const table: [number | null, PushResult['kind']][] = [
+      [200, 'ok'],
+      [201, 'ok'],
+      [404, 'gone'],
+      [410, 'gone'],
+      [429, 'retry'],
+      [500, 'retry'],
+      [503, 'retry'],
+      [null, 'retry'],
+      [400, 'fail'],
+      [401, 'fail'],
+      [403, 'fail'],
+      [413, 'fail'],
+    ];
+    for (const [status, kind] of table)
+      expect([status, classifyStatus(status).kind]).toEqual([status, kind]);
+  });
+
+  it('再送しない失敗（400 など）は log を書き、次の実行で送り直さない', async () => {
+    await make('papa', timed('2026-09-28', '10:00', null));
+    sender.next = () => ({ kind: 'fail', status: 400 });
+    at('2026-09-28', '09:30');
+    await scheduler.tick();
+    at('2026-09-28', '09:31');
+    await scheduler.tick();
+    expect(sender.to('papa')).toHaveLength(1);
+    expect(logKeys()).toHaveLength(1);
+  });
+
+  it('429・5xx が続いた購読は 6 回目の失敗で止まり、ログに残す（log は書かない）', async () => {
+    await make('papa', timed('2026-09-28', '10:00', null));
+    sender.next = () => ({ kind: 'retry', status: 503 });
+    for (let i = 0; i < 8; i++) {
+      at('2026-09-28', `09:3${i}`);
+      await scheduler.tick();
+    }
+    expect(sender.to('papa')).toHaveLength(6);
+    expect(subscriptionOf('papa')?.failCount).toBe(6);
+    expect(ctx.logs.text).toContain('push subscription stopped');
+    expect(logKeys()).toEqual([]);
+  });
+
+  it('端末のない人には送らず log も書かない（10 分以内に端末を登録すれば届く）', async () => {
+    const id = subscriptionOf('papa')?.id as string;
+    const res = await send(ctx, 'DELETE', `/api/push/subscriptions/${id}`, { headers: as('papa') });
+    expect(res.status).toBe(204);
+    await make('papa', timed('2026-09-28', '10:00', null));
+    at('2026-09-28', '09:30');
+    await scheduler.tick();
+    expect(logKeys()).toEqual([]);
+    await subscribe('papa');
+    at('2026-09-28', '09:32');
+    await scheduler.tick();
+    expect(sender.to('papa')).toHaveLength(1);
+  });
+
+  it('VAPID の鍵がなければ、スケジューラは予定の通知・まとめを作らず、変更のまとめ待ちは捨てる', async () => {
+    const off = createScheduler({
+      db: ctx.database.db,
+      clock: ctx.clock,
+      sender: null,
+      logger: ctx.logger,
+    });
+    await setNotifications('papa', {
+      familyChanges: 'all',
+      morningDigest: { enabled: true, time: '07:00' },
+    });
+    at('2026-09-28', '06:50');
+    await make('mama', timed('2026-09-28', '07:20', null, { title: '朝', forEveryone: true }));
+    at('2026-09-28', '07:00');
+    expect(await off.tick()).toEqual({ reminders: 0, digests: 0, changes: 0 });
+    await off.stop();
+    expect(sender.sent).toEqual([]);
+    expect(logKeys()).toEqual([]);
+    const left = ctx.database.db.select().from(pendingNotices).all();
+    expect(left.length).toBeGreaterThan(0);
     expect(left.every((n) => n.flushedAt !== null)).toBe(true);
   });
 });

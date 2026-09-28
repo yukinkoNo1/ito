@@ -1,10 +1,10 @@
 import type { ItoDb } from '../data/db';
 import { clearDevice } from './device';
-import { unsubscribePush as unsubscribeThisDevice } from './push';
+import { markPushOptedOut, unsubscribePush as unsubscribeThisDevice } from './push';
 
 /**
  * この端末からログアウト（§17）: Push の購読を解除（サーバーの購読も消す）→ IndexedDB・Cache Storage を削除 →
- * はじめて（S-11）へ。
+ * はじめて（S-11）へ。端末の保存を消したあとも「自分で止めた」印は残す（次に開いたとき勝手に購読し直さない）
  */
 export async function logoutThisDevice(
   db: ItoDb,
@@ -28,4 +28,5 @@ export async function logoutThisDevice(
     for (const r of registrations) await r.unregister();
   } catch {}
   clearDevice();
+  markPushOptedOut();
 }

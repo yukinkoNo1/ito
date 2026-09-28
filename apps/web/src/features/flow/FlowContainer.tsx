@@ -14,7 +14,7 @@ import {
   NOTIFICATIONS_NOTICE,
   type NoticeKind,
 } from '../../pwa/home-notice';
-import { enablePush, loadPublicKey } from '../../pwa/push';
+import { enablePush, loadPublicKey, type PublicKeyState, UNKNOWN_KEY } from '../../pwa/push';
 import UpcomingScreen from '../../ui/screens/UpcomingScreen';
 import { buildFlowScreen, FLOW_WINDOW_DAYS, shiftWeek } from '../../viewmodels/screens';
 
@@ -38,7 +38,7 @@ export function FlowContainer() {
   const [selected, setSelected] = useState<DateISO | null>(null);
   const [range, setRange] = useState<{ from: DateISO; to: DateISO } | null>(null);
   const [notice, setNotice] = useState<NoticeKind | null>(homeNoticeKind);
-  const [publicKey, setPublicKey] = useState<string | null>(null);
+  const [publicKey, setPublicKey] = useState<PublicKeyState>(UNKNOWN_KEY);
   const toast = useToast();
 
   // 通知の案内を出すときは公開鍵を先に取っておく（ボタンを押したあと最初に待つのは許可のダイアログ。§15）

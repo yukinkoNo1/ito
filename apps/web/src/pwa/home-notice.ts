@@ -1,7 +1,7 @@
 import type { HomeNoticeVM } from '../ui/types';
 import { DEVICE_KEYS, readDevice } from './device';
 import { isStandalone } from './install';
-import { notificationPermission } from './push';
+import { notificationPermission, pushOptedOut } from './push';
 
 /** ホームの案内（F-23）。ホーム画面に未追加なら「ホーム画面に追加」、追加済みで通知の許可がまだなら「通知をオンにする」（§15） */
 export const INSTALL_NOTICE: HomeNoticeVM = {
@@ -23,8 +23,10 @@ export function homeNoticeKind(): NoticeKind | null {
   if (!isStandalone()) {
     return readDevice(DEVICE_KEYS.installNoticeDismissed) !== '1' ? 'install' : null;
   }
+  // この端末で自分で止めた（ログアウト・この端末の削除）なら、ホームでは案内しない（設定からオンにできる）
   if (
     notificationPermission() === 'default' &&
+    !pushOptedOut() &&
     readDevice(DEVICE_KEYS.notificationsNoticeDismissed) !== '1'
   ) {
     return 'notifications';

@@ -7,6 +7,7 @@ import {
   WEEKDAY_LABELS,
   weekdayOf,
 } from '@ito/core/jst';
+import { reminderOptions as reminderChoices } from '@ito/core/notify';
 import { ChevronDown, ChevronUp } from 'lucide-react';
 import { useRef, useState } from 'react';
 import { reminderLabel } from '../labels';
@@ -18,9 +19,6 @@ import type {
   RecurrenceVM,
   Weekday,
 } from '../types';
-
-const TIMED_REMINDERS = [0, -10, -30, -60, -1440];
-const ALL_DAY_REMINDERS = [-240, 420];
 
 type RecurrenceKind = RecurrenceVM['kind'];
 const RECURRENCE_OPTIONS: {
@@ -129,7 +127,8 @@ export default function EventComposerSheet({
       : [...draft.memberIds, id];
     patch({ forEveryone: false, memberIds: next });
   };
-  const reminderOptions = draft?.allDay ? ALL_DAY_REMINDERS : TIMED_REMINDERS;
+  // 詳細（S-04）と同じ候補（core の reminderOptions。今の値が候補になければ足す）
+  const reminderOptions = draft ? reminderChoices(draft.allDay, draft.myReminders) : [];
 
   return (
     <div className="sheet-backdrop sheet-backdrop--solid">

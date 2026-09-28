@@ -18,7 +18,9 @@ import {
   enablePush,
   loadPublicKey,
   notificationPermission,
+  type PublicKeyState,
   thisDeviceSubscriptionId,
+  UNKNOWN_KEY,
   unsubscribePush,
 } from '../../pwa/push';
 import SettingsScreen from '../../ui/screens/SettingsScreen';
@@ -71,7 +73,7 @@ export function SettingsContainer() {
   const [admin, setAdmin] = useState<AdminMemberDTO[]>([]);
   const [permission, setPermission] = useState<NotificationPermissionVM>(notificationPermission);
   const [devices, setDevices] = useState<DeviceDTO[]>([]);
-  const [publicKey, setPublicKey] = useState<string | null>(null);
+  const [publicKey, setPublicKey] = useState<PublicKeyState>(UNKNOWN_KEY);
   const isAdmin = me?.role === 'admin';
   const showToast = toast.show;
 
@@ -178,8 +180,11 @@ export function SettingsContainer() {
       onRemoveDevice={(id) => {
         void (async () => {
           // この端末なら、ブラウザの購読もやめる（サーバーの購読も消える）
-          if (id === thisDeviceSubscriptionId()) await unsubscribePush();
-          else if (
+          // この端末を消したら「自分で止めた」ことになり、状態は「通知をオンにする」に戻る
+          if (id === thisDeviceSubscriptionId()) {
+            await unsubscribePush();
+            setPermission(notificationPermission());
+          } else if (
             !(await sendOnline(store, showToast, 'DELETE', `/api/push/subscriptions/${id}`, {}))
           )
             return;

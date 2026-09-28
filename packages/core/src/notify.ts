@@ -118,7 +118,16 @@ export function offsetLabel(offset: number, allDay: boolean): string {
     const dayShift = Math.floor(offset / 1440);
     const minutes = ((offset % 1440) + 1440) % 1440;
     const time = `${Math.floor(minutes / 60)}:${String(minutes % 60).padStart(2, '0')}`;
-    const day = dayShift === 0 ? '当日' : dayShift === -1 ? '前日' : `${-dayShift}日前`;
+    const day =
+      dayShift === 0
+        ? '当日'
+        : dayShift === -1
+          ? '前日'
+          : dayShift === 1
+            ? '翌日'
+            : dayShift > 0
+              ? `${dayShift}日後`
+              : `${-dayShift}日前`;
     return `${day} ${time}`;
   }
   if (offset === 0) return '開始時';

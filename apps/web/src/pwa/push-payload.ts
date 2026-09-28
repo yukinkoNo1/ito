@@ -10,6 +10,8 @@ export interface NotificationPlan {
   options: {
     body: string;
     tag: string;
+    /** 同じ tag の通知を置き換えるときも音・振動で知らせる（予定を動かしたあとの通知などを見落とさない） */
+    renotify: boolean;
     icon: string;
     badge: string;
     data: { url: string };
@@ -39,6 +41,7 @@ export function planNotification(data: unknown): NotificationPlan {
     options: {
       body,
       tag,
+      renotify: true,
       icon: ICON,
       badge: ICON,
       data: { url: safeNotificationPath(ok ? o.url : null) },

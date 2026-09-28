@@ -118,6 +118,9 @@ describe('文言・候補', () => {
     expect(offsetLabel(-240, true)).toBe('前日 20:00');
     expect(offsetLabel(420, true)).toBe('当日 7:00');
     expect(offsetLabel(-1680, true)).toBe('2日前 20:00');
+    // 上限の 1440 分（終日は開始日の 0:00 から 1 日後＝翌日 0:00）
+    expect(offsetLabel(1440, true)).toBe('翌日 0:00');
+    expect(offsetLabel(1440 + 1440, true)).toBe('2日後 0:00');
   });
 
   it('reminderOptions は今の値も候補に含める', () => {

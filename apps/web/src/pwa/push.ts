@@ -10,9 +10,22 @@ import { detectPlatform, isStandalone } from './install';
  * - iOS は購読が黙って失効するので、起動・前面復帰のたびに getSubscription() を確かめ、あればサーバーに upsert、
  *   なくて許可済みなら購読し直す
  * - サーバーが返した購読の ID を端末に保存する（端末の一覧の「この端末」に使う）
+ * - ログアウト・「この端末」を一覧から消したら「自分で止めた」印を付け、起動・前面復帰では購読し直さない
+ *   （印を消すのは「通知をオンにする」＝enablePush だけ）
  */
 
 export const PUSH_SUBSCRIPTION_KEY = 'push.subscriptionId';
+export const PUSH_OPTED_OUT_KEY = 'push.optedOut';
+
+/** この端末で通知を自分で止めたか */
+export function pushOptedOut(): boolean {
+  return readDevice(PUSH_OPTED_OUT_KEY) === '1';
+}
+
+/** 「自分で止めた」印を付ける（ログアウトは端末の保存を消したあとで付け直す） */
+export function markPushOptedOut(): void {
+  writeDevice(PUSH_OPTED_OUT_KEY, '1');
+}
 
 export interface PushEnv {
   notification: {
@@ -50,7 +63,10 @@ function browserEnv(): PushEnv {
           },
     async getRegistration() {
       if (!('serviceWorker' in navigator) || typeof PushManager === 'undefined') return null;
-      return (await navigator.serviceWorker.ready) as unknown as Awaited<
+      // ready は SW を登録していない環境（pnpm dev）では解決しないので、登録があるときだけ待つ
+      const reg = await navigator.serviceWorker.getRegistration();
+      if (!reg) return null;
+      return (reg.active ? reg : await navigator.serviceWorker.ready) as unknown as Awaited<
         ReturnType<PushEnv['getRegistration']>
       >;
     },
@@ -74,17 +90,37 @@ export function deviceLabel(): string {
   return 'パソコン';
 }
 
+/**
+ * VAPID の公開鍵の状態: 取れた（ready）／家のサーバーに鍵がない（disabled。公開鍵が null）／
+ * まだ取れていない（unknown。通信の失敗など。押したときに取り直す）
+ */
+export type PublicKeyState =
+  | { status: 'ready'; key: string }
+  | { status: 'disabled' }
+  | { status: 'unknown' };
+
+export const UNKNOWN_KEY: PublicKeyState = { status: 'unknown' };
+
 let cachedKey: string | null = null;
 
-/** VAPID の公開鍵（画面を開いたときに呼んでおく。使えなければ null） */
-export async function loadPublicKey(env: PushEnv = browserEnv()): Promise<string | null> {
-  if (cachedKey) return cachedKey;
+/** VAPID の公開鍵（画面を開いたときに呼んでおく）。取れた鍵だけを覚える */
+export async function loadPublicKey(env: PushEnv = browserEnv()): Promise<PublicKeyState> {
+  if (cachedKey) return { status: 'ready', key: cachedKey };
   try {
     const res = await env.request('GET', '/api/push/public-key');
     const key = (res.body as { publicKey?: unknown } | null)?.publicKey;
-    if (res.status === 200 && typeof key === 'string') cachedKey = key;
+    if (res.status === 200 && typeof key === 'string' && key.length > 0) {
+      cachedKey = key;
+      return { status: 'ready', key };
+    }
+    if (res.status === 200 && key === null) return { status: 'disabled' };
   } catch {}
-  return cachedKey;
+  return UNKNOWN_KEY;
+}
+
+/** テスト用: 覚えた公開鍵を忘れる */
+export function forgetPublicKey(): void {
+  cachedKey = null;
 }
 
 async function register(env: PushEnv, sub: PushSubscriptionLike): Promise<boolean> {
@@ -103,17 +139,22 @@ async function register(env: PushEnv, sub: PushSubscriptionLike): Promise<boolea
 export type EnableResult = 'enabled' | 'denied' | 'unsupported' | 'unavailable' | 'failed';
 
 /**
- * 「通知をオンにする」（ボタンを押したときに呼ぶ）。publicKey は先に取っておいたもの。
- * 最初に await するのは requestPermission()
+ * 「通知をオンにする」（ボタンを押したときに呼ぶ）。publicKey は画面を開いたときに取っておいたもの。
+ * 最初に await するのは requestPermission()。鍵が取れていなければ許可のあとで取り直し、
+ * 家のサーバーに鍵がない（unavailable）と通信の失敗（failed）を分ける
  */
 export async function enablePush(
-  publicKey: string | null,
+  publicKey: PublicKeyState,
   env: PushEnv = browserEnv(),
 ): Promise<EnableResult> {
   if (!env.notification) return 'unsupported';
   const permission = await env.notification.requestPermission();
   if (permission !== 'granted') return 'denied';
-  if (!publicKey) return 'unavailable';
+  // 自分でオンにしたので、「自分で止めた」印を消す（起動・前面復帰の確かめも再び働く）
+  writeDevice(PUSH_OPTED_OUT_KEY, null);
+  const key = publicKey.status === 'unknown' ? await loadPublicKey(env) : publicKey;
+  if (key.status === 'disabled') return 'unavailable';
+  if (key.status === 'unknown') return 'failed';
   try {
     const reg = await env.getRegistration();
     if (!reg) return 'unsupported';
@@ -121,7 +162,7 @@ export async function enablePush(
       (await reg.pushManager.getSubscription()) ??
       (await reg.pushManager.subscribe({
         userVisibleOnly: true,
-        applicationServerKey: base64UrlToBytes(publicKey),
+        applicationServerKey: base64UrlToBytes(key.key),
       }));
     return (await register(env, sub)) ? 'enabled' : 'failed';
   } catch {
@@ -131,28 +172,34 @@ export async function enablePush(
 
 /**
  * 起動・前面復帰のたびに呼ぶ。購読があれば upsert、なくて許可済みなら購読し直す（iOS の黙った失効への対策）。
- * 許可がなければ何もしない
+ * 許可がないとき・自分で止めたときは何もしない
  */
 export async function checkPushSubscription(env: PushEnv = browserEnv()): Promise<void> {
-  if (env.notification?.permission !== 'granted') return;
+  if (env.notification?.permission !== 'granted' || pushOptedOut()) return;
   try {
     const reg = await env.getRegistration();
     if (!reg) return;
     let sub = await reg.pushManager.getSubscription();
     if (!sub) {
       const key = await loadPublicKey(env);
-      if (!key) return;
+      if (key.status !== 'ready') return;
       sub = await reg.pushManager.subscribe({
         userVisibleOnly: true,
-        applicationServerKey: base64UrlToBytes(key),
+        applicationServerKey: base64UrlToBytes(key.key),
       });
     }
+    // 待っているあいだに止めた（ログアウト・この端末の削除）なら登録しない
+    if (pushOptedOut()) return;
     await register(env, sub);
   } catch {}
 }
 
-/** この端末の購読をやめる（ログアウト・この端末を一覧から消したとき）。サーバーの購読を消してから unsubscribe */
+/**
+ * この端末の購読をやめる（ログアウト・この端末を一覧から消したとき）。「自分で止めた」印を付け、
+ * サーバーの購読を消してから unsubscribe
+ */
 export async function unsubscribePush(env: PushEnv = browserEnv()): Promise<void> {
+  markPushOptedOut();
   const id = readDevice(PUSH_SUBSCRIPTION_KEY);
   if (id) {
     try {
@@ -171,7 +218,10 @@ export function thisDeviceSubscriptionId(): string | null {
   return readDevice(PUSH_SUBSCRIPTION_KEY);
 }
 
-/** 通知の許可の状態（§22 NotificationPermissionVM。iPhone でホーム画面に未追加なら needs-install） */
+/**
+ * 通知の許可の状態（§22 NotificationPermissionVM。iPhone でホーム画面に未追加なら needs-install）。
+ * 許可済みでも、この端末で自分で止めたなら default（「通知をオンにする」を出す）
+ */
 export function notificationPermission():
   | 'default'
   | 'granted'
@@ -181,7 +231,8 @@ export function notificationPermission():
   if (detectPlatform() === 'ios' && !isStandalone()) return 'needs-install';
   if (typeof Notification === 'undefined' || typeof PushManager === 'undefined')
     return 'unsupported';
-  return Notification.permission;
+  const permission = Notification.permission;
+  return permission === 'granted' && pushOptedOut() ? 'default' : permission;
 }
 
 /** アプリのバッジを未読の数に合わせる（対応していなければ何もしない） */
